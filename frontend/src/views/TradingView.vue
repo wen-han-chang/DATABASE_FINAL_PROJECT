@@ -179,7 +179,7 @@
                   <div v-if="currentHolding" class="bg-blue-50 rounded-xl px-3 py-2 flex items-center justify-between">
                     <span class="text-xs text-blue-600">目前持有</span>
                     <span class="text-xs font-bold text-blue-700">
-                      {{ currentHolding.lots }} 張 · 均成本 {{ currentHolding.avgCost.toFixed(2) }}
+                      {{ fmt(currentHolding.shares) }} 股 · 均成本 {{ currentHolding.avgCost.toFixed(2) }}
                     </span>
                   </div>
                 </div>
@@ -208,15 +208,15 @@
 
                 <!-- Quantity -->
                 <div>
-                  <label class="text-xs font-semibold text-brand-primary block mb-1.5">數量（張）</label>
+                  <label class="text-xs font-semibold text-brand-primary block mb-1.5">數量（股）</label>
                   <div class="flex items-center gap-2">
-                    <button @click="lots = Math.max(1, lots - 1)"
+                    <button @click="shares = Math.max(1, shares - 1)"
                       class="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center
                              hover:bg-slate-200 transition-colors font-bold text-brand-primary text-lg leading-none">−</button>
-                    <input v-model.number="lots" type="number" min="1" step="1"
+                    <input v-model.number="shares" type="number" min="1" step="1"
                       class="flex-1 text-center py-2 rounded-lg border border-slate-200 text-sm font-bold
                              outline-none focus:border-blue-500" />
-                    <button @click="lots++"
+                    <button @click="shares++"
                       class="w-9 h-9 rounded-lg bg-slate-100 flex items-center justify-center
                              hover:bg-slate-200 transition-colors font-bold text-brand-primary text-lg leading-none">+</button>
                   </div>
@@ -233,7 +233,7 @@
                 <!-- Fee breakdown -->
                 <div class="bg-slate-50 rounded-xl p-3 space-y-1.5 text-xs">
                   <div class="flex justify-between text-brand-muted">
-                    <span>面額 ({{ lots }}張 × 1000股)</span>
+                    <span>面額 ({{ fmt(shares) }}股 × {{ mockPrice.toFixed(2) }}元)</span>
                     <span class="font-mono">{{ fmt(faceAmount) }}</span>
                   </div>
                   <div class="flex justify-between text-brand-muted">
@@ -258,7 +258,7 @@
                   :class="orderType === 'buy'
                     ? 'bg-stock-up hover:bg-red-600'
                     : 'bg-stock-down hover:bg-green-600'">
-                  確認{{ orderType === 'buy' ? '買入' : '賣出' }} {{ lots }} 張
+                  確認{{ orderType === 'buy' ? '買入' : '賣出' }} {{ fmt(shares) }} 股
                 </button>
 
                 <!-- Validation hint -->
@@ -312,7 +312,7 @@
                           <p class="font-semibold text-brand-primary">{{ h.name }}</p>
                           <p class="text-xs text-brand-muted">{{ h.code }}</p>
                         </td>
-                        <td class="px-4 py-3.5 font-mono text-center">{{ h.lots }}</td>
+                        <td class="px-4 py-3.5 font-mono text-center">{{ fmt(h.shares) }}</td>
                         <td class="px-4 py-3.5 font-mono text-right">{{ h.avgCost.toFixed(2) }}</td>
                         <td class="px-4 py-3.5 font-mono text-right">{{ h.price.toFixed(2) }}</td>
                         <td class="px-4 py-3.5 font-mono text-right">{{ fmt(h.marketVal) }}</td>
@@ -384,7 +384,7 @@
                           <p class="font-semibold text-brand-primary">{{ o.name }}</p>
                           <p class="text-xs text-brand-muted">{{ o.code }}</p>
                         </td>
-                        <td class="px-4 py-3 font-mono text-center">{{ o.lots }}</td>
+                        <td class="px-4 py-3 font-mono text-center">{{ fmt(o.shares) }}</td>
                         <td class="px-4 py-3 font-mono text-right">{{ o.price.toFixed(2) }}</td>
                         <td class="px-4 py-3 text-right">
                           <p class="font-mono font-semibold"
@@ -577,7 +577,7 @@ function pickStock(stock) {
   showDrop.value      = false
   searchFocused.value = false
   orderType.value     = 'buy'
-  lots.value          = 1
+  shares.value        = 1
 }
 function quickSelect(code) {
   const stock = findStock(code)
@@ -603,7 +603,7 @@ const currentHolding = computed(() =>
 
 // ── Order form ─────────────────────────────────────────────
 const orderType  = ref('buy')
-const lots       = ref(1)
+const shares     = ref(1)
 const activeTab  = ref('持股明細')
 
 const isETF = computed(() =>
@@ -612,7 +612,7 @@ const isETF = computed(() =>
     : false
 )
 
-const faceAmount = computed(() => lots.value * 1000 * mockPrice.value)
+const faceAmount = computed(() => shares.value * mockPrice.value)
 const fee        = computed(() => portfolio.calcFee(faceAmount.value))
 const tax        = computed(() =>
   orderType.value === 'sell' ? portfolio.calcTax(faceAmount.value, activeStock.value?.code ?? '') : 0
@@ -624,31 +624,31 @@ const totalAmount = computed(() =>
 )
 
 const validationMsg = computed(() => {
-  if (!activeStock.value || lots.value < 1) return ''
+  if (!activeStock.value || shares.value < 1) return ''
   if (orderType.value === 'buy' && portfolio.cash < totalAmount.value) {
     return `現金不足，需 ${fmt(totalAmount.value)} 元（可用 ${fmt(portfolio.cash)} 元）`
   }
   if (orderType.value === 'sell') {
     const h = portfolio.getHolding(activeStock.value.code)
-    if (!h || h.lots < lots.value) {
-      return `持股不足（目前持有 ${h?.lots ?? 0} 張）`
+    if (!h || h.shares < shares.value) {
+      return `持股不足（目前持有 ${fmt(h?.shares ?? 0)} 股）`
     }
   }
   return ''
 })
 
 const canOrder = computed(() =>
-  activeStock.value && lots.value >= 1 && !validationMsg.value
+  activeStock.value && shares.value >= 1 && !validationMsg.value
 )
 
 // ── Place order ────────────────────────────────────────────
 function placeOrder() {
   if (!canOrder.value) return
   const result = orderType.value === 'buy'
-    ? portfolio.buy(activeStock.value, lots.value, mockPrice.value)
-    : portfolio.sell(activeStock.value, lots.value, mockPrice.value)
+    ? portfolio.buy(activeStock.value, shares.value, mockPrice.value)
+    : portfolio.sell(activeStock.value, shares.value, mockPrice.value)
   showToast(result.ok, result.msg)
-  if (result.ok) lots.value = 1
+  if (result.ok) shares.value = 1
 }
 
 // ── Toast ──────────────────────────────────────────────────
@@ -663,8 +663,8 @@ function showToast(ok, msg) {
 }
 
 // ── Table columns ──────────────────────────────────────────
-const holdingCols = ['個股', '張數', '均成本', '現價', '市值', '損益']
-const orderCols   = ['時間', '方向', '個股', '張數', '成交價', '金額']
+const holdingCols = ['個股', '股數', '均成本', '現價', '市值', '損益']
+const orderCols   = ['時間', '方向', '個股', '股數', '成交價', '金額']
 
 // ── Formatters ─────────────────────────────────────────────
 function fmt(n) {
