@@ -19,13 +19,6 @@
       </div>
     </div>
 
-    <!-- Investor badge -->
-    <div class="mx-3 mb-6 bg-white/10 rounded-xl p-3">
-      <p class="text-xs text-slate-400 mb-1">我的投資畫像</p>
-      <p class="text-sm font-semibold text-white">{{ investor.profileEmoji }} {{ investor.profileLabel }}</p>
-      <p class="text-xs text-slate-400 mt-1">{{ investor.periodLabel }}</p>
-    </div>
-
     <!-- Nav items -->
     <div class="space-y-1 flex-1">
       <RouterLink
@@ -45,15 +38,6 @@
     <!-- Bottom actions -->
     <div class="mt-4 space-y-1 border-t border-white/10 pt-4">
       <button
-        @click="resetProfile"
-        class="flex items-center gap-3 px-3 py-2.5 w-full rounded-xl text-sm text-slate-400
-               hover:bg-white/10 hover:text-white transition-colors"
-      >
-        <Settings class="w-4 h-4 flex-shrink-0" />
-        重設投資偏好
-      </button>
-
-      <button
         @click="handleLogout"
         class="flex items-center gap-3 px-3 py-2.5 w-full rounded-xl text-sm text-slate-400
                hover:bg-red-500/20 hover:text-red-300 transition-colors"
@@ -67,14 +51,12 @@
 
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { TrendingUp, LayoutDashboard, Settings, LogOut, Search, Wallet } from 'lucide-vue-next'
-import { useInvestorStore } from '@/stores/investor'
+import { TrendingUp, LayoutDashboard, LogOut, Search, Wallet } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 
-const investor = useInvestorStore()
-const auth     = useAuthStore()
-const route    = useRoute()
-const router   = useRouter()
+const auth   = useAuthStore()
+const route  = useRoute()
+const router = useRouter()
 
 const navItems = [
   { path: '/',        label: '首頁總覽', icon: LayoutDashboard },
@@ -82,13 +64,7 @@ const navItems = [
   { path: '/trading', label: '模擬下單', icon: Wallet },
 ]
 
-function resetProfile() {
-  investor.reset()
-  router.push('/onboarding')
-}
-
 function handleLogout() {
-  investor.reset()
   auth.logout()
   router.push('/login')
 }

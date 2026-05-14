@@ -72,17 +72,15 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { BrainCircuit, MessageCircle, TrendingUp, TrendingDown, Minus, X } from 'lucide-vue-next'
-import { useInvestorStore } from '@/stores/investor'
 
 defineEmits(['open-drawer'])
 
-const store       = useInvestorStore()
-const loading     = ref(true)
+const loading      = ref(true)
 const showQuestion = ref(false)
 
 const summaries = [
-  `本週台股加權指數收 18,420 點，週線上漲 1.2%。科技族群持續引領大盤，半導體類股法人連買五日，台積電突破近期整理平台。根據您的「${store.profileLabel}」風格，目前盤面技術面偏多，量能仍在擴增中，建議關注核心持股是否維持在主要均線上方。`,
-  `美股四大指數週線收紅，AI 概念股動能不減，帶動台股電子權值股走揚。外資單週買超逾 80 億，籌碼面轉趨積極。依您的投資偏好，可考慮在 K 線圖技術訊號確認後，適度提高核心持倉比例，但留意美債殖利率走向帶來的波動風險。`,
+  `本週台股加權指數收 18,420 點，週線上漲 1.2%。科技族群持續引領大盤，半導體類股法人連買五日，台積電突破近期整理平台。目前盤面技術面偏多，量能仍在擴增中，建議關注核心持股是否維持在主要均線上方。`,
+  `美股四大指數週線收紅，AI 概念股動能不減，帶動台股電子權值股走揚。外資單週買超逾 80 億，籌碼面轉趨積極。可考慮在 K 線圖技術訊號確認後，適度提高核心持倉比例，但留意美債殖利率走向帶來的波動風險。`,
   `台股本週在 18,000 點整數關卡附近整理，成交量較前週縮減 15%，呈現量縮橫盤格局。此為強勢股整理的健康型態，籌碼逐步收斂。建議以均線多頭排列且量縮整理的個股為優先觀察對象，等待量能回升再行進場。`,
 ]
 

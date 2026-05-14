@@ -191,9 +191,12 @@ const showDropdown = ref(false)
 const inputEl     = ref(null)
 const searchWrap  = ref(null)
 
+let skipNextWatch = false
+
 watch(query, (q) => {
-  results.value   = searchStocks(q)
-  highlighted.value = 0
+  if (skipNextWatch) { skipNextWatch = false; return }
+  results.value      = searchStocks(q)
+  highlighted.value  = 0
   showDropdown.value = q.trim().length > 0
 })
 
@@ -226,6 +229,7 @@ const selected = ref(null)
 
 function selectStock(stock) {
   selected.value     = stock
+  skipNextWatch      = true
   query.value        = `${stock.code} ${stock.name}`
   showDropdown.value = false
   focused.value      = false

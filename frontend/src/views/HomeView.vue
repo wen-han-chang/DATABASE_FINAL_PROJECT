@@ -3,12 +3,8 @@
     <!-- Top bar: greeting + profile badge -->
     <div class="flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold text-brand-primary">
-          歡迎回來 <span class="text-blue-500">{{ store.profileEmoji }}</span>
-        </h1>
-        <p class="text-brand-muted text-sm mt-0.5">
-          {{ formattedDate }} · {{ store.profileLabel }} · {{ store.periodLabel }}
-        </p>
+        <h1 class="text-2xl font-bold text-brand-primary">歡迎回來</h1>
+        <p class="text-brand-muted text-sm mt-0.5">{{ formattedDate }}</p>
       </div>
       <div class="flex items-center gap-2 bg-white rounded-xl px-4 py-2.5 shadow-sm border border-slate-100">
         <div class="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
@@ -43,13 +39,11 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { useInvestorStore } from '@/stores/investor'
 import MarketAIView    from '@/components/MarketAIView.vue'
 import StockChart      from '@/components/StockChart.vue'
 import DecisionSandbox from '@/components/DecisionSandbox.vue'
 import KnowledgeDrawer from '@/components/KnowledgeDrawer.vue'
 
-const store       = useInvestorStore()
 const drawerOpen  = ref(false)
 const drawerTerm  = ref('')
 
