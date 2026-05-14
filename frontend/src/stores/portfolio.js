@@ -16,7 +16,7 @@ export const usePortfolioStore = defineStore('portfolio', () => {
   // ── Core state ────────────────────────────────────────────
   const capital  = ref(0)       // 使用者設定的初始資產
   const cash     = ref(0)       // 現金可用餘額
-  const holdings = ref([])      // [{ code, name, sector, lots, avgCost }]  lots = 張
+  const holdings = ref([])      // [{ code, name, sector, shares, avgCost }]  shares = 股
   const orders   = ref([])      // 交易紀錄
   const isReady  = ref(false)   // 已完成初始資產設定
 
@@ -27,8 +27,8 @@ export const usePortfolioStore = defineStore('portfolio', () => {
       const d = JSON.parse(saved)
       capital.value  = d.capital  ?? 0
       cash.value     = d.cash     ?? 0
-      holdings.value = d.holdings ?? []
-      orders.value   = d.orders   ?? []
+      holdings.value = (d.holdings ?? []).map(normalizeHolding)
+      orders.value   = (d.orders ?? []).map(normalizeOrder)
       isReady.value  = d.isReady  ?? false
     }
   } catch { /* ignore */ }
@@ -49,8 +49,8 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     holdings.value.map(h => {
       const stock      = findStock(h.code)
       const price      = stock ? getMockPrice(stock) : h.avgCost
-      const marketVal  = h.lots * 1000 * price
-      const costVal    = h.lots * 1000 * h.avgCost
+      const marketVal  = h.shares * price
+      const costVal    = h.shares * h.avgCost
       const pnl        = marketVal - costVal
       const pnlPct     = costVal > 0 ? (pnl / costVal) * 100 : 0
       return { ...h, price, marketVal, costVal, pnl, pnlPct }
@@ -97,8 +97,8 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     return amount * (isETF ? 0.001 : 0.003)
   }
 
-  function buy(stock, lots, price) {
-    const faceAmount = lots * 1000 * price
+  function buy(stock, shares, price) {
+    const faceAmount = shares * price
     const fee        = calcFee(faceAmount)
     const totalCost  = faceAmount + fee
 
@@ -111,35 +111,35 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     const idx = holdings.value.findIndex(h => h.code === stock.code)
     if (idx >= 0) {
       const h = holdings.value[idx]
-      const newAvg = (h.lots * h.avgCost + lots * price) / (h.lots + lots)
-      holdings.value[idx] = { ...h, lots: h.lots + lots, avgCost: +newAvg.toFixed(4) }
+      const newAvg = (h.shares * h.avgCost + shares * price) / (h.shares + shares)
+      holdings.value[idx] = { ...h, shares: h.shares + shares, avgCost: +newAvg.toFixed(4) }
     } else {
       holdings.value.push({
         code: stock.code, name: stock.name, sector: stock.sector,
-        lots, avgCost: price,
+        shares, avgCost: price,
       })
     }
 
     orders.value.unshift({
       id: Date.now(), type: 'buy',
       code: stock.code, name: stock.name,
-      lots, price,
+      shares, price,
       faceAmount, fee, tax: 0,
       total: totalCost,
       timestamp: now(),
     })
 
-    return { ok: true, msg: `買入 ${stock.name} ${lots} 張，扣款 ${fmt(totalCost)} 元（含手續費 ${fmt(fee)} 元）` }
+    return { ok: true, msg: `買入 ${stock.name} ${fmt(shares)} 股，扣款 ${fmt(totalCost)} 元（含手續費 ${fmt(fee)} 元）` }
   }
 
-  function sell(stock, lots, price) {
+  function sell(stock, shares, price) {
     const idx = holdings.value.findIndex(h => h.code === stock.code)
-    if (idx < 0 || holdings.value[idx].lots < lots) {
-      const held = idx >= 0 ? holdings.value[idx].lots : 0
-      return { ok: false, msg: `持股不足，目前持有 ${held} 張` }
+    if (idx < 0 || holdings.value[idx].shares < shares) {
+      const held = idx >= 0 ? holdings.value[idx].shares : 0
+      return { ok: false, msg: `持股不足，目前持有 ${fmt(held)} 股` }
     }
 
-    const faceAmount = lots * 1000 * price
+    const faceAmount = shares * price
     const fee        = calcFee(faceAmount)
     const tax        = calcTax(faceAmount, stock.code)
     const received   = faceAmount - fee - tax
@@ -147,22 +147,22 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     cash.value += received
 
     const h = holdings.value[idx]
-    if (h.lots === lots) {
+    if (h.shares === shares) {
       holdings.value.splice(idx, 1)
     } else {
-      holdings.value[idx] = { ...h, lots: h.lots - lots }
+      holdings.value[idx] = { ...h, shares: h.shares - shares }
     }
 
     orders.value.unshift({
       id: Date.now(), type: 'sell',
       code: stock.code, name: stock.name,
-      lots, price,
+      shares, price,
       faceAmount, fee, tax,
       total: received,
       timestamp: now(),
     })
 
-    return { ok: true, msg: `賣出 ${stock.name} ${lots} 張，到帳 ${fmt(received)} 元（手續費 ${fmt(fee)} 元，證交稅 ${fmt(tax)} 元）` }
+    return { ok: true, msg: `賣出 ${stock.name} ${fmt(shares)} 股，到帳 ${fmt(received)} 元（手續費 ${fmt(fee)} 元，證交稅 ${fmt(tax)} 元）` }
   }
 
   function getHolding(code) {
@@ -180,4 +180,17 @@ export const usePortfolioStore = defineStore('portfolio', () => {
 
 function fmt(n) {
   return Math.round(n).toLocaleString('zh-TW')
+}
+
+function normalizeHolding(h) {
+  const shares = h.shares ?? ((h.lots ?? 0) * 1000)
+  const { lots, ...rest } = h
+  return { ...rest, shares }
+}
+
+function normalizeOrder(o) {
+  const shares = o.shares ?? ((o.lots ?? 0) * 1000)
+  const faceAmount = o.faceAmount ?? (shares * o.price)
+  const { lots, ...rest } = o
+  return { ...rest, shares, faceAmount }
 }
