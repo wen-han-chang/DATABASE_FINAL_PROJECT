@@ -10,7 +10,7 @@
 
 ```bash
 # 1. 進入專案目錄
-cd db-course-final/frontend
+cd db-course-final
 
 # 2. 安裝相依套件
 npm install
