@@ -78,8 +78,11 @@ export function seedFromCode(code) {
 export function searchStocks(query) {
   const q = query.trim().toLowerCase()
   if (!q) return []
+  const keywords = q.split(/\s+/).filter(Boolean)
   return TW_STOCKS.filter(
-    s => s.code.includes(q) || s.name.includes(q) || s.sector.includes(q)
+    s => keywords.every(
+      k => s.code.includes(k) || s.name.toLowerCase().includes(k) || s.sector.toLowerCase().includes(k)
+    )
   ).slice(0, 10)
 }
 

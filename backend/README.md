@@ -12,13 +12,26 @@
 
 | 需求 | 是否完成 | 後端做法 |
 |------|----------|----------|
-| 顯示歷史 K 線 | 已完成 | 前端呼叫 `/api/market/db-bars/:code`，後端查 SQL Server，必要時才向 TWSE 抓最近約 13 個月歷史日線 |
+| 顯示歷史 K 線 | 已完成 | 前端優先呼叫 `/api/market/db-bars/:code?quick=1`，後端先查 SQL Server，必要時才向 TWSE 抓資料 |
 | 計算 MA 指標 | 已完成在前端 | 後端回傳日線 OHLCV，前端用這些資料計算 MA5/MA10/MA20/MA60/MA120/MA240 |
 | 顯示單檔準即時報價 | 已完成 | 前端呼叫 `/api/quote/:code`，後端向 TWSE MIS 抓現價、漲跌、開高低量 |
 | 避免一次抓全部股票報價 | 已完成 | 只有使用者正在看某檔股票時才抓，後端另有 20 秒快取 |
 | OpenAPI 最新交易日資料 | 已完成但不是 K 線主資料源 | `/api/market/*` 與 `/api/market/import-preview` 可用於股票清單、最新交易日資料與匯入預覽 |
 
 直接結論：TWSE OpenAPI 的 `STOCK_DAY_ALL` 不適合拿來做歷史 K 線，因為它主要提供最新交易日的整體市場資料。歷史 K 線應該用 TWSE `STOCK_DAY`；準即時報價應該用 TWSE MIS。這個 backend 目前就是這樣拆分。
+
+### 本次更新完成事項
+
+這次更新主要是修正「第一次看股票圖表太慢、畫面殘留載入字樣、以及前端搜尋誤判找不到」三個問題。
+
+| 更新項目 | 修改後行為 | 為什麼要這樣做 |
+|----------|------------|----------------|
+| 歷史 K 線 quick 模式 | 前端先呼叫 `/api/market/db-bars/:code?quick=1` | 讓圖表先用可用資料顯示，不必每次都等完整歷史同步 |
+| 資料庫已有 TWSE 歷史 | 直接回傳 SQL Server 既有完整資料，`historyStatus` 為 `complete` | 舊資料已在資料庫時，不應該重新等待，也不應該顯示載入中 |
+| 資料庫尚無 TWSE 歷史 | 先抓最近約 2 個月真實資料回前端 | 讓首次查詢有真實資料可以快速畫圖 |
+| 背景補資料 | 非 quick 請求會在背景補資料：有舊資料只補最近 2 個月，完全沒有歷史才補 13 個月 | 避免每次都全量抓 13 個月，降低 TWSE 與本機負擔 |
+| 前端載入提示 | 只在沒有任何 K 線資料時顯示「真實歷史資料載入中」 | 一旦已有資料，就不應該讓使用者誤以為還沒完成 |
+| 前端搜尋 | `2382 廣達` 這種「代碼 + 名稱」會拆成多個關鍵字比對 | 避免已選到股票卻還顯示「找不到」 |
 
 ---
 
@@ -106,7 +119,20 @@ https://mis.twse.com.tw/stock/api/getStockInfo.jsp
 
 ## 3. 歷史 K 線資料流程
 
-前端呼叫：
+前端第一次載入圖表時呼叫 quick 模式：
+
+```txt
+GET /api/market/db-bars/2330?quick=1
+```
+
+quick 模式用途：
+
+- 如果資料庫已有 TWSE 歷史資料，直接回傳既有完整資料，畫面不需要等。
+- 如果資料庫還沒有 TWSE 歷史資料，才先抓近期真實日線，讓圖表快速顯示。
+- 前端另發非 quick 背景請求；若已有舊資料，後端只補最近約 2 個月，若完全沒有 TWSE 歷史才補 13 個月。
+- 回傳的 `historyStatus` 可讓前端判斷目前是 `complete`、`partial_loading`、`loading` 或 `not_found`。
+
+若需要強制等待完整資料，可呼叫：
 
 ```txt
 GET /api/market/db-bars/2330
@@ -116,16 +142,15 @@ GET /api/market/db-bars/2330
 
 ```txt
 前端 StockChart.vue
-  -> frontend/src/services/twseApi.js 的 getDbBars(code)
-  -> backend/server.js 的 /api/market/db-bars/:code
+  -> frontend/src/services/twseApi.js 的 getDbBars(code, { quick: 1 })
+  -> backend/server.js 的 /api/market/db-bars/:code?quick=1
   -> backend/dao.js 的 getStockBars(code)
   -> 先查 SQL Server 的 stocks，確認股票存在
-  -> 查 stock_sync，判斷今天是否已同步過
-  -> 如果需要同步，呼叫 backend/twseExtra.js 的 fetchRecentHistory(code, 13)
-  -> 向 TWSE STOCK_DAY 抓最近約 13 個月資料
-  -> 用 transaction 刪除該股票舊 K 線並寫入真實 K 線
-  -> 更新 stock_sync
-  -> 從 stock_daily_bars 讀出資料回傳給前端
+  -> 如果已有 TWSE 歷史，直接回 SQL Server 完整資料
+  -> 如果尚未有 TWSE 歷史，先抓近期 TWSE 真實日線回前端
+  -> 前端另發背景請求補資料
+  -> 若已有舊 TWSE 歷史，背景只補最近約 2 個月並 upsert
+  -> 若完全沒有 TWSE 歷史，背景才補最近約 13 個月完整資料
 ```
 
 這樣設計的原因：
@@ -134,6 +159,7 @@ GET /api/market/db-bars/2330
 - 使用者沒看的股票不需要馬上抓，否則會浪費官方 API 與本機資源。
 - 第一次看某檔才抓，之後同一天直接查資料庫，符合專題展示與資源控制。
 - 最近約 13 個月通常足夠前端計算 MA240，因為一年約 240 個交易日。
+- 若資料庫已有舊 TWSE 歷史，畫面應直接顯示舊資料；背景只補缺的近期資料，不應該讓使用者一直看到載入中。
 
 回傳格式重點：
 
@@ -141,6 +167,7 @@ GET /api/market/db-bars/2330
 {
   "ok": true,
   "source": "ncu_db.stock_daily_bars",
+  "historyStatus": "complete",
   "code": "2330",
   "count": 253,
   "data": [
@@ -155,6 +182,18 @@ GET /api/market/db-bars/2330
   ]
 }
 ```
+
+`source` 與 `historyStatus` 的意義：
+
+| 欄位值 | 意義 | 前端建議 |
+|--------|------|----------|
+| `source = ncu_db.stock_daily_bars` | 後端回傳 SQL Server 內已同步完成的 TWSE 歷史資料 | 標示為資料庫 TWSE 歷史 |
+| `source = ncu_db.stock_daily_bars.stale` | 資料庫已有 TWSE 歷史，但今天尚未補最新近期資料 | 仍可直接畫圖，背景補資料即可 |
+| `source = twse.stock_day.quick` | 資料庫尚無 TWSE 歷史，後端先回最近約 2 個月真實資料 | 可先畫近期圖，不要標成模擬資料 |
+| `historyStatus = complete` | 前端已有完整可用歷史資料 | 不顯示載入提示 |
+| `historyStatus = partial_loading` | 目前先有近期真實資料，背景仍可能補完整歷史 | 可畫圖；如果要提示，提示應避免遮住主要畫面 |
+| `historyStatus = loading` | 目前還沒有可畫的真實 K 線 | 才顯示「真實歷史資料載入中」 |
+| `historyStatus = not_found` | 後端股票表找不到該代碼 | 前端應提示股票不存在或未支援 |
 
 欄位說明：
 

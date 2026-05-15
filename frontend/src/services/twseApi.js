@@ -125,8 +125,8 @@ export function getMarketImportPreview() {
  * 後端會查 SQL Server 的 stock_daily_bars 表回傳。
  * 回傳格式：{ ok, source, code, count, data:[{date,open,high,low,close,volume}] }
  */
-export function getDbBars(code) {
-  return requestJson(`/api/market/db-bars/${encodeURIComponent(code)}`)
+export function getDbBars(code, query = {}) {
+  return requestJson(`/api/market/db-bars/${encodeURIComponent(code)}`, query)
 }
 
 /**
