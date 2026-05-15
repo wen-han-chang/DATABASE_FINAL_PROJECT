@@ -449,7 +449,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import {
   Wallet, PiggyBank, Search, X, ShoppingCart,
   RotateCcw, AlertTriangle, CheckCircle2, AlertCircle,
@@ -471,13 +471,26 @@ const capitalPresets = [
   { label: '500萬', value: 5000000 },
 ]
 
-function doSetup() {
+// 進入交易頁先從後端載入投資組合（持股 / 委託 / 現金）
+onMounted(() => {
+  portfolio.load()
+})
+
+async function doSetup() {
   if (!setupAmount.value || setupAmount.value < 10000) return
-  portfolio.setup(setupAmount.value)
+  try {
+    await portfolio.setup(setupAmount.value)
+  } catch (e) {
+    showToast(false, `設定失敗：${e.message}`)
+  }
 }
 
-function doReset() {
-  portfolio.reset()
+async function doReset() {
+  try {
+    await portfolio.reset()
+  } catch (e) {
+    showToast(false, `重置失敗：${e.message}`)
+  }
   confirmReset.value = false
   activeStock.value  = null
   query.value        = ''
@@ -642,11 +655,11 @@ const canOrder = computed(() =>
 )
 
 // ── Place order ────────────────────────────────────────────
-function placeOrder() {
+async function placeOrder() {
   if (!canOrder.value) return
   const result = orderType.value === 'buy'
-    ? portfolio.buy(activeStock.value, lots.value, mockPrice.value)
-    : portfolio.sell(activeStock.value, lots.value, mockPrice.value)
+    ? await portfolio.buy(activeStock.value, lots.value, mockPrice.value)
+    : await portfolio.sell(activeStock.value, lots.value, mockPrice.value)
   showToast(result.ok, result.msg)
   if (result.ok) lots.value = 1
 }

@@ -16,6 +16,9 @@
       </div>
     </div>
 
+    <!-- TWSE 真實資料展示：用來確認 backend + frontend 已經串通 -->
+    <TwseMarketPanel />
+
     <!-- AI Market Summary + proactive question -->
     <MarketAIView @open-drawer="openDrawer" />
 
@@ -48,6 +51,7 @@ import MarketAIView    from '@/components/MarketAIView.vue'
 import StockChart      from '@/components/StockChart.vue'
 import DecisionSandbox from '@/components/DecisionSandbox.vue'
 import KnowledgeDrawer from '@/components/KnowledgeDrawer.vue'
+import TwseMarketPanel from '@/components/TwseMarketPanel.vue'
 
 const store       = useInvestorStore()
 const drawerOpen  = ref(false)

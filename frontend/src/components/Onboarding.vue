@@ -188,10 +188,15 @@ const periodOptions = [
   { value: 'long',  emoji: '🌳', label: '長線 > 1 年',   desc: '複利成長，耐心等待' },
 ]
 
-function submit() {
-  store.saveProfile(form)
-  step.value = 4
-  setTimeout(() => router.push('/'), 2500)
+async function submit() {
+  try {
+    await store.saveProfile(form)   // 寫進後端 investor_profiles 表
+    step.value = 4
+    setTimeout(() => router.push('/'), 2500)
+  } catch (e) {
+    // 後端儲存失敗：留在原步驟並提示，避免假成功
+    alert(`儲存失敗：${e.message}`)
+  }
 }
 </script>
 

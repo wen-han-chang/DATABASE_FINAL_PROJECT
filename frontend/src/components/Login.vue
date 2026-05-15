@@ -129,8 +129,10 @@ import {
   LogIn, Loader2, AlertCircle, Info, Zap,
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
+import { useInvestorStore } from '@/stores/investor'
 
 const authStore    = useAuthStore()
+const investorStore = useInvestorStore()
 const router       = useRouter()
 const email        = ref('')
 const password     = ref('')
@@ -145,6 +147,8 @@ function quickFill() {
 async function handleSubmit() {
   try {
     await authStore.login(email.value, password.value)
+    // 載入此帳號在後端的問卷狀態，讓路由守衛能正確判斷要不要去 onboarding
+    await investorStore.loadProfile()
     router.push('/')
   } catch {
     // error is set inside the store
