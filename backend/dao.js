@@ -260,7 +260,7 @@ export async function getStockBars(code, opts = {}) {
       }
     }
 
-    // 第一次看這檔時，直接向 TWSE 抓短期真實資料，不再用假資料墊圖。
+    // 第一次看這檔時，直接向 TWSE 抓短期真實資料，不再用測試資料墊圖。
     let quickBars = []
     try {
       quickBars = (await fetchRecentHistory(cleanCode, QUICK_HISTORY_MONTHS)).slice(-QUICK_BAR_LIMIT)

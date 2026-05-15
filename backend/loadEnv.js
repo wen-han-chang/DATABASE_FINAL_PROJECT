@@ -27,7 +27,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// 由目前檔案位置推導 backend/.env，避免寫死任何組員電腦上的專案路徑
+// 由目前檔案位置推導 backend/.env，避免寫死任何開發者本機的專案路徑
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const envPath = path.join(currentDir, '.env')
 
