@@ -6,9 +6,9 @@
       <div>
         <h1 class="text-2xl font-bold text-brand-primary flex items-center gap-2">
           <Wallet class="w-6 h-6 text-blue-500" />
-          模擬下單系統
+          下單練習系統
         </h1>
-        <p class="text-brand-muted text-sm mt-1">以模擬資金體驗台股買賣，訓練投資直覺</p>
+        <p class="text-brand-muted text-sm mt-1">以練習資金體驗台股買賣，訓練投資直覺</p>
       </div>
       <button v-if="portfolio.isReady" @click="confirmReset = true"
         class="flex items-center gap-1.5 text-xs text-slate-400 hover:text-red-500 transition-colors px-3 py-2 rounded-lg hover:bg-red-50">
@@ -26,7 +26,7 @@
             <PiggyBank class="w-8 h-8 text-blue-500" />
           </div>
           <h2 class="text-xl font-bold text-brand-primary">設定初始資產</h2>
-          <p class="text-brand-muted text-sm mt-2">輸入您的模擬資金總額，開始體驗台股投資</p>
+          <p class="text-brand-muted text-sm mt-2">輸入您的練習資金總額，開始體驗台股投資</p>
         </div>
 
         <!-- Quick presets -->
@@ -62,7 +62,7 @@
           class="w-full py-3.5 rounded-2xl font-semibold text-white transition-all
                  disabled:opacity-40 disabled:cursor-not-allowed"
           :class="setupAmount >= 10000 ? 'bg-brand-primary hover:bg-slate-800 active:scale-[0.98]' : 'bg-slate-300'">
-          開始模擬交易
+          開始練習交易
         </button>
       </div>
 

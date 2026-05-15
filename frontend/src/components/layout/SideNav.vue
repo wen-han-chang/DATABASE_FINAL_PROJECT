@@ -61,7 +61,7 @@ const router = useRouter()
 const navItems = [
   { path: '/',        label: '首頁總覽', icon: LayoutDashboard },
   { path: '/search',  label: '個股查詢', icon: Search },
-  { path: '/trading', label: '模擬下單', icon: Wallet },
+  { path: '/trading', label: '下單練習', icon: Wallet },
 ]
 
 function handleLogout() {

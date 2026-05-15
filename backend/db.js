@@ -48,7 +48,7 @@ function getDbConfig() {
       trustServerCertificate: parseBool(process.env.DB_TRUST_CERT, true),
     },
     pool: {
-      max: 10, // 連線池最多 10 條連線，對學生專題已足夠
+      max: 10, // 連線池最多 10 條連線，對目前開發與展示環境已足夠
       min: 0,
       idleTimeoutMillis: 30000, // 連線閒置 30 秒自動釋放
     },

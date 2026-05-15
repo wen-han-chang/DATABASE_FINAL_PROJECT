@@ -291,14 +291,16 @@ const server = http.createServer(async (req, res) => {
         requestUrl.pathname.replace('/api/market/db-bars/', ''),
       )
       const refresh = requestUrl.searchParams.get('refresh') === '1'
+      const quick = requestUrl.searchParams.get('quick') === '1'
       try {
-        const bars = await getStockBars(code, { refresh })
+        const result = await getStockBars(code, { refresh, quick })
         sendJson(res, 200, {
           ok: true,
-          source: 'ncu_db.stock_daily_bars',
+          source: result.source,
+          historyStatus: result.historyStatus,
           code,
-          count: bars.length,
-          data: bars,
+          count: result.bars.length,
+          data: result.bars,
         })
       } catch (error) {
         sendDaoError(res, error)

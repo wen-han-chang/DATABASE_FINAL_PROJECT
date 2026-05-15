@@ -31,6 +31,12 @@ function httpError(statusCode, message) {
 }
 
 const LOT_SHARES = 1000 // 1 張 = 1000 股
+const FULL_HISTORY_MONTHS = 13
+const QUICK_HISTORY_MONTHS = 2
+const QUICK_BAR_LIMIT = 24
+const QUICK_HISTORY_CACHE_TTL_MS = 60000
+const fullHistoryJobs = new Set()
+const quickHistoryCache = new Map()
 
 function calcFee(faceAmount) {
   // 手續費 0.1425%，最低 20 元，取兩位小數
@@ -88,96 +94,224 @@ async function readBarsFromDb(code) {
   })
 }
 
-/**
- * 取某檔日 K。核心策略：資料庫當「快取/真相來源」，TWSE 只在需要時補。
- *
- * 流程：
- * 1. 用 code 找 stock_id（不在 stocks 表 → 回空陣列，前端會自動退回模擬）。
- * 2. 看 stock_sync：沒同步過 / 來源還是 seed / 今天還沒同步過 / 指定強制，
- *    就去 TWSE STOCK_DAY 抓最近約 13 個月真實日線。
- * 3. 抓到 → 在「一個交易」內：刪掉該檔舊 bars、寫入真實 bars、更新 stock_sync。
- *    抓失敗 → 不動資料庫（保留現有，下次再試），畫面仍可用既有資料。
- * 4. 回傳資料庫裡該檔的日 K（給前端 K 線圖）。
- *
- * 「只在使用者看某檔時才抓、且每天每檔最多抓一次」→ 不會濫用官方資源。
- *
- * @param {string} code
- * @param {{ refresh?: boolean }} opts refresh=true 強制重抓（demo 用）
- */
-export async function getStockBars(code, opts = {}) {
-  const cleanCode = String(code || '').trim()
-  if (!cleanCode) throw httpError(400, '缺少股票代碼')
+async function findStockIdByCode(code) {
+  const sRows = await query('SELECT id FROM dbo.stocks WHERE code = @code', { code })
+  return sRows[0]?.id ?? null
+}
 
-  // 1) 找 stock_id
-  const sRows = await query('SELECT id FROM dbo.stocks WHERE code = @code', { code: cleanCode })
-  if (sRows.length === 0) return [] // 非已知股票 → 交給前端模擬 fallback
-  const stockId = sRows[0].id
+function toDateText(value) {
+  if (!value) return null
+  return new Date(value).toISOString().slice(0, 10)
+}
 
-  // 2) 是否需要同步
+async function readStockSync(stockId) {
   const syncRows = await query(
     `SELECT source,
             CONVERT(date, last_synced) AS synced_date
      FROM dbo.stock_sync WHERE stock_id = @sid`,
     { sid: stockId },
   )
-  const sync = syncRows[0]
-  const todayStr = new Date().toISOString().slice(0, 10)
-  const syncedStr = sync?.synced_date
-    ? new Date(sync.synced_date).toISOString().slice(0, 10)
-    : null
-  const needSync =
-    opts.refresh === true ||
-    !sync ||
-    sync.source !== 'twse' ||
-    syncedStr !== todayStr
+  return syncRows[0] ?? null
+}
 
-  // 3) 需要就抓真實歷史並入庫
-  if (needSync) {
-    let realBars = []
-    try {
-      realBars = await fetchRecentHistory(cleanCode, 13)
-    } catch {
-      realBars = [] // 抓失敗 → 不動資料庫
+function isFreshFullSync(sync) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  return sync?.source === 'twse' && toDateText(sync.synced_date) === todayStr
+}
+
+async function replaceBarsWithTwseHistory(stockId, bars) {
+  if (!bars.length) return 0
+
+  await withTransaction(async (tx) => {
+    // 換成真實資料：先刪該檔舊 bars。
+    await new sql.Request(tx)
+      .input('sid', sql.SmallInt, stockId)
+      .query('DELETE FROM dbo.stock_daily_bars WHERE stock_id = @sid')
+
+    // 寫入真實 bars。
+    for (const b of bars) {
+      await new sql.Request(tx)
+        .input('sid', sql.SmallInt, stockId)
+        .input('d', sql.Date, b.date)
+        .input('o', sql.Decimal(10, 2), b.open)
+        .input('h', sql.Decimal(10, 2), b.high)
+        .input('l', sql.Decimal(10, 2), b.low)
+        .input('c', sql.Decimal(10, 2), b.close)
+        .input('v', sql.BigInt, b.volume)
+        .query(`INSERT INTO dbo.stock_daily_bars
+                  (stock_id, trade_date, [open], high, low, [close], volume)
+                VALUES (@sid, @d, @o, @h, @l, @c, @v)`)
     }
 
-    if (realBars.length > 0) {
-      await withTransaction(async (tx) => {
-        // 換成真實資料：先刪該檔舊 bars
-        await new sql.Request(tx)
-          .input('sid', sql.SmallInt, stockId)
-          .query('DELETE FROM dbo.stock_daily_bars WHERE stock_id = @sid')
+    // source = twse 代表這檔已完成完整歷史同步，不是 seed 備援資料。
+    await new sql.Request(tx)
+      .input('sid', sql.SmallInt, stockId)
+      .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
+                 UPDATE dbo.stock_sync
+                    SET source = N'twse', last_synced = SYSDATETIME()
+                  WHERE stock_id = @sid;
+               ELSE
+                 INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
+                 VALUES (@sid, N'twse', SYSDATETIME());`)
+  })
 
-        // 寫入真實 bars
-        for (const b of realBars) {
-          await new sql.Request(tx)
-            .input('sid', sql.SmallInt, stockId)
-            .input('d', sql.Date, b.date)
-            .input('o', sql.Decimal(10, 2), b.open)
-            .input('h', sql.Decimal(10, 2), b.high)
-            .input('l', sql.Decimal(10, 2), b.low)
-            .input('c', sql.Decimal(10, 2), b.close)
-            .input('v', sql.BigInt, b.volume)
-            .query(`INSERT INTO dbo.stock_daily_bars
-                      (stock_id, trade_date, [open], high, low, [close], volume)
-                    VALUES (@sid, @d, @o, @h, @l, @c, @v)`)
-        }
+  return bars.length
+}
 
-        // 更新同步中繼表（沒有就新增，有就更新）
-        await new sql.Request(tx)
-          .input('sid', sql.SmallInt, stockId)
-          .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
-                     UPDATE dbo.stock_sync
-                        SET source = N'twse', last_synced = SYSDATETIME()
-                      WHERE stock_id = @sid;
-                   ELSE
-                     INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
-                     VALUES (@sid, N'twse', SYSDATETIME());`)
-      })
+async function syncFullHistory(cleanCode, stockId) {
+  const realBars = await fetchRecentHistory(cleanCode, FULL_HISTORY_MONTHS)
+  if (!realBars.length) return 0
+  return replaceBarsWithTwseHistory(stockId, realBars)
+}
+
+async function upsertRecentBars(stockId, bars) {
+  if (!bars.length) return 0
+
+  await withTransaction(async (tx) => {
+    for (const b of bars) {
+      await new sql.Request(tx)
+        .input('sid', sql.SmallInt, stockId)
+        .input('d', sql.Date, b.date)
+        .input('o', sql.Decimal(10, 2), b.open)
+        .input('h', sql.Decimal(10, 2), b.high)
+        .input('l', sql.Decimal(10, 2), b.low)
+        .input('c', sql.Decimal(10, 2), b.close)
+        .input('v', sql.BigInt, b.volume)
+        .query(`IF EXISTS (
+                  SELECT 1 FROM dbo.stock_daily_bars
+                   WHERE stock_id = @sid AND trade_date = @d
+                )
+                  UPDATE dbo.stock_daily_bars
+                     SET [open] = @o, high = @h, low = @l, [close] = @c, volume = @v
+                   WHERE stock_id = @sid AND trade_date = @d;
+                ELSE
+                  INSERT INTO dbo.stock_daily_bars
+                    (stock_id, trade_date, [open], high, low, [close], volume)
+                  VALUES
+                    (@sid, @d, @o, @h, @l, @c, @v);`)
+    }
+
+    await new sql.Request(tx)
+      .input('sid', sql.SmallInt, stockId)
+      .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
+                 UPDATE dbo.stock_sync
+                    SET source = N'twse', last_synced = SYSDATETIME()
+                  WHERE stock_id = @sid;
+               ELSE
+                 INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
+                 VALUES (@sid, N'twse', SYSDATETIME());`)
+  })
+
+  return bars.length
+}
+
+async function syncRecentHistory(cleanCode, stockId) {
+  const recentBars = await fetchRecentHistory(cleanCode, QUICK_HISTORY_MONTHS)
+  return upsertRecentBars(stockId, recentBars)
+}
+
+/**
+ * 取某檔日 K。核心策略：資料庫當「快取/真相來源」，TWSE 只在需要時補。
+ *
+ * 流程：
+ * 1. 用 code 找 stock_id（不在 stocks 表 → 回空陣列）。
+ * 2. quick=true 時若資料庫已有 TWSE 歷史，直接回資料庫資料，不顯示載入。
+ * 3. quick=true 且資料庫還沒有 TWSE 歷史，才抓最近約 2 個月快速回圖。
+ * 4. 非 quick 背景請求：已有舊 TWSE 歷史時只補最近 2 個月；完全沒有 TWSE 歷史才補完整 13 個月。
+ *
+ * 這樣可以避免第一次點股票時卡在 13 個月歷史資料下載。
+ *
+ * @param {string} code
+ * @param {{ refresh?: boolean, quick?: boolean }} opts
+ * @returns {Promise<{bars:Array, source:string, historyStatus:string}>}
+ */
+export async function getStockBars(code, opts = {}) {
+  const cleanCode = String(code || '').trim()
+  if (!cleanCode) throw httpError(400, '缺少股票代碼')
+
+  // 1) 找 stock_id
+  const stockId = await findStockIdByCode(cleanCode)
+  if (!stockId) {
+    return { bars: [], source: 'not_found', historyStatus: 'not_found' }
+  }
+
+  // 2) 是否需要同步
+  const sync = await readStockSync(stockId)
+  const hasFreshFullHistory = !opts.refresh && isFreshFullSync(sync)
+
+  if (opts.quick === true) {
+    const existingBars = await readBarsFromDb(cleanCode)
+
+    // 資料庫已經有 TWSE 歷史時，先完整顯示既有資料；缺的近期資料交給背景請求補。
+    if (sync?.source === 'twse' && existingBars.length) {
+      return {
+        bars: existingBars,
+        source: hasFreshFullHistory ? 'ncu_db.stock_daily_bars' : 'ncu_db.stock_daily_bars.stale',
+        historyStatus: 'complete',
+      }
+    }
+
+    const cachedQuick = quickHistoryCache.get(cleanCode)
+    if (cachedQuick && Date.now() - cachedQuick.ts < QUICK_HISTORY_CACHE_TTL_MS) {
+      return {
+        bars: cachedQuick.bars,
+        source: 'twse.stock_day.quick.cache',
+        historyStatus: 'partial_loading',
+      }
+    }
+
+    // 第一次看這檔時，直接向 TWSE 抓短期真實資料，不再用測試資料墊圖。
+    let quickBars = []
+    try {
+      quickBars = (await fetchRecentHistory(cleanCode, QUICK_HISTORY_MONTHS)).slice(-QUICK_BAR_LIMIT)
+    } catch {
+      quickBars = []
+    }
+    if (quickBars.length) {
+      quickHistoryCache.set(cleanCode, { bars: quickBars, ts: Date.now() })
+    }
+
+    return {
+      bars: quickBars,
+      source: quickBars.length ? 'twse.stock_day.quick' : 'twse.stock_day.loading',
+      historyStatus: quickBars.length ? 'partial_loading' : 'loading',
     }
   }
 
-  // 4) 回傳資料庫裡的資料
-  return readBarsFromDb(cleanCode)
+  const existingBars = await readBarsFromDb(cleanCode)
+  const shouldFullSync = opts.refresh === true || sync?.source !== 'twse' || !existingBars.length
+  const needSync = opts.refresh === true || !hasFreshFullHistory
+  if (needSync) {
+    if (!fullHistoryJobs.has(cleanCode)) {
+      fullHistoryJobs.add(cleanCode)
+      try {
+        if (shouldFullSync) {
+          await syncFullHistory(cleanCode, stockId)
+        } else {
+          await syncRecentHistory(cleanCode, stockId)
+        }
+      } catch {
+        // 抓失敗不動資料庫，回傳現有資料；前端會顯示資料仍在載入。
+      } finally {
+        fullHistoryJobs.delete(cleanCode)
+      }
+    }
+  }
+
+  const latestSync = await readStockSync(stockId)
+  if (latestSync?.source !== 'twse') {
+    return {
+      bars: [],
+      source: 'twse.stock_day.loading',
+      historyStatus: 'loading',
+    }
+  }
+
+  return {
+    bars: await readBarsFromDb(cleanCode),
+    source: 'ncu_db.stock_daily_bars',
+    historyStatus: latestSync?.source === 'twse' ? 'complete' : 'loading',
+  }
 }
 
 // 即時報價的記憶體快取：同一檔 20 秒內不重複打 TWSE（避免濫用）

@@ -51,7 +51,6 @@
 <script setup>
 import { ref, reactive, watch, onMounted, onBeforeUnmount, shallowRef } from 'vue'
 import * as echarts from 'echarts'
-import { seedFromCode } from '@/data/twStocks'
 import { getDbBars } from '@/services/twseApi'
 import LiveQuote from '@/components/LiveQuote.vue'
 
@@ -65,70 +64,6 @@ const props = defineProps({
     default: 460,
   },
 })
-
-// ─────────────────────────────────────────────
-// Mock data generator (Mulberry32 seeded PRNG)
-// ─────────────────────────────────────────────
-function mulberry32(seed) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-function boxMuller(rand) {
-  const u1 = Math.max(rand(), 1e-10)
-  const u2 = rand()
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
-}
-
-function generateDailyData(stock) {
-  const n          = 300
-  const startPrice = stock.price
-  const volatility = stock.vol ?? 0.018
-  const seed       = seedFromCode(stock.code)
-  const rand       = mulberry32(seed)
-
-  const endDate = new Date('2025-04-30')
-  const tradingDates = []
-  const cur = new Date(endDate)
-  while (tradingDates.length < n) {
-    const dow = cur.getDay()
-    if (dow !== 0 && dow !== 6) tradingDates.unshift(cur.toISOString().slice(0, 10))
-    cur.setDate(cur.getDate() - 1)
-  }
-
-  let prevClose = startPrice
-  let momentum  = 0
-  const data    = []
-
-  for (let i = 0; i < n; i++) {
-    const vol       = volatility * (0.8 + rand() * 0.7)
-    const logReturn = 0.0003 + momentum * 0.001 + vol * boxMuller(rand)
-    const open      = prevClose
-    const close     = prevClose * Math.exp(logReturn)
-    const wick      = Math.abs(close - open) + prevClose * vol * 0.8
-    const high      = Math.max(open, close) + wick * (0.1 + rand() * 0.5)
-    const low       = Math.min(open, close) - wick * (0.1 + rand() * 0.5)
-    const volume    = Math.round(50000 * (1 + Math.abs(logReturn) * 12) * (0.5 + rand()))
-
-    data.push({
-      date:   tradingDates[i],
-      open:   +open.toFixed(2),
-      high:   +high.toFixed(2),
-      low:    +low.toFixed(2),
-      close:  +close.toFixed(2),
-      volume,
-    })
-
-    momentum  = momentum * 0.93 + logReturn
-    prevClose = close
-  }
-  return data
-}
 
 function aggregateCandles(daily, mode) {
   if (mode === 'day') return daily
@@ -174,29 +109,78 @@ const chartEl      = ref(null)
 const chart        = shallowRef(null)
 const activePeriod = ref('day')
 
-// 圖表資料：優先從後端資料庫(stock_daily_bars)取得；
-// 後端沒開或查不到時，自動退回前端自己產生，確保圖表永遠畫得出來。
+// 圖表資料只顯示 TWSE 真實資料。
+// 第一次看某檔時先拿近期真實資料；完整 13 個月歷史由前端另發背景請求補齊。
 const dailyData       = shallowRef([])
-const dataSourceLabel = ref('模擬資料')
+const dataSourceLabel = ref('真實歷史資料載入中')
+const historyStatus   = ref('loading')
+const historyMessage  = ref('真實歷史資料載入中...')
+let loadSeq = 0
+let fullLoadTimer = null
+
+function stopFullLoadTimer() {
+  if (fullLoadTimer) {
+    clearTimeout(fullLoadTimer)
+    fullLoadTimer = null
+  }
+}
+
+function applyHistoryResponse(res) {
+  historyStatus.value = res?.historyStatus || 'loading'
+
+  if (res?.data?.length) {
+    dailyData.value = res.data
+    if (historyStatus.value === 'complete') {
+      dataSourceLabel.value = '來源:資料庫(TWSE 歷史)'
+      historyMessage.value = ''
+    } else {
+      dataSourceLabel.value = '來源:TWSE 近期真實資料'
+      historyMessage.value = ''
+    }
+  } else {
+    dailyData.value = []
+    dataSourceLabel.value = '真實歷史資料載入中'
+    historyMessage.value = '真實歷史資料載入中...'
+  }
+
+  redraw()
+}
+
+function loadFullHistoryInBackground(seq) {
+  fullLoadTimer = setTimeout(async () => {
+    if (seq !== loadSeq) return
+
+    try {
+      const res = await getDbBars(props.stock.code)
+      if (seq !== loadSeq) return
+      if (res?.data?.length) applyHistoryResponse(res)
+    } catch {
+      // 背景完整資料失敗時不干擾近期圖表，使用者仍可看到近期真實 K 線。
+    }
+  }, 1500)
+}
 
 async function loadData() {
-  try {
-    const res = await getDbBars(props.stock.code)
-    if (res?.data?.length) {
-      dailyData.value = res.data
-      // 後端會把該檔換成 TWSE 真實歷史並存進資料庫，故標示來源為資料庫
-      dataSourceLabel.value = '來源:資料庫(TWSE 歷史)'
-    } else {
-      // 資料庫沒有這檔（例如不在已灌入的 50 檔）→ 退回前端產生
-      dailyData.value = generateDailyData(props.stock)
-      dataSourceLabel.value = '模擬資料（備援）'
-    }
-  } catch {
-    // 後端未啟動或連線失敗 → 退回前端產生，畫面不中斷
-    dailyData.value = generateDailyData(props.stock)
-    dataSourceLabel.value = '模擬資料（後端未連，備援）'
-  }
+  const seq = ++loadSeq
+  stopFullLoadTimer()
+  dailyData.value = []
+  historyStatus.value = 'loading'
+  dataSourceLabel.value = '真實歷史資料載入中'
+  historyMessage.value = '真實歷史資料載入中...'
   redraw()
+
+  try {
+    const res = await getDbBars(props.stock.code, { quick: 1 })
+    if (seq !== loadSeq) return
+    applyHistoryResponse(res)
+    loadFullHistoryInBackground(seq)
+  } catch {
+    if (seq !== loadSeq) return
+    dailyData.value = []
+    dataSourceLabel.value = '真實資料暫時無法取得'
+    historyMessage.value = '後端連線中斷，無法取得真實歷史資料'
+    redraw()
+  }
 }
 
 const periods = [
@@ -218,10 +202,7 @@ const UP   = '#EF4444'
 const DOWN = '#22C55E'
 
 function buildOption() {
-  // 有從後端拿到資料就用；還沒拿到（首次渲染瞬間）先用前端產生的墊著
-  const rawData = dailyData.value.length
-    ? dailyData.value
-    : generateDailyData(props.stock)
+  const rawData = dailyData.value
   const candles = aggregateCandles(rawData, activePeriod.value)
   const dates   = candles.map(c => c.date)
   const closes  = candles.map(c => c.close)
@@ -244,10 +225,30 @@ function buildOption() {
       connectNulls: false,
       z: 5,
     }))
+  const zoomStart = historyStatus.value === 'complete' && dates.length > 60 ? 65 : 0
+  const loadingGraphic = historyMessage.value
+    ? [{
+        type: 'text',
+        right: 20,
+        top: dates.length ? 18 : '42%',
+        style: {
+          text: historyMessage.value,
+          fill: '#64748B',
+          fontSize: 12,
+          fontWeight: 600,
+          backgroundColor: 'rgba(255,255,255,0.88)',
+          borderColor: '#E2E8F0',
+          borderWidth: 1,
+          borderRadius: 8,
+          padding: [7, 10],
+        },
+      }]
+    : []
 
   return {
     backgroundColor: '#ffffff',
     animation:       false,
+    graphic:         loadingGraphic,
     tooltip: {
       trigger:     'axis',
       axisPointer: {
@@ -315,10 +316,10 @@ function buildOption() {
       },
     ],
     dataZoom: [
-      { type: 'inside', xAxisIndex: [0, 1], start: 65, end: 100, minSpan: 3 },
+      { type: 'inside', xAxisIndex: [0, 1], start: zoomStart, end: 100, minSpan: 3 },
       {
         type: 'slider', xAxisIndex: [0, 1], bottom: 4, height: 22,
-        start: 65, end: 100,
+        start: zoomStart, end: 100,
         handleStyle: { color: '#3B82F6', borderColor: '#3B82F6' },
         fillerColor: 'rgba(59,130,246,0.1)',
         borderColor: '#E2E8F0',
@@ -359,13 +360,14 @@ let resizeObserver = null
 
 onMounted(() => {
   chart.value = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-  chart.value.setOption(buildOption())   // 先用前端墊圖，畫面不空白
-  loadData()                              // 再跟後端資料庫要正式資料並重畫
+  chart.value.setOption(buildOption())   // 先顯示「真實歷史資料載入中」狀態
+  loadData()                              // 先抓近期真實資料，再輪詢完整歷史
   resizeObserver = new ResizeObserver(() => chart.value?.resize())
   resizeObserver.observe(chartEl.value)
 })
 
 onBeforeUnmount(() => {
+  stopFullLoadTimer()
   resizeObserver?.disconnect()
   chart.value?.dispose()
 })

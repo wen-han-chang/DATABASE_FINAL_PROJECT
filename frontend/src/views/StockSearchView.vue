@@ -76,7 +76,7 @@
       <!-- No results -->
       <Transition name="dropdown">
         <div
-          v-if="showDropdown && query.trim() && !results.length"
+          v-if="showDropdown && query.trim() && !results.length && !selected"
           class="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-200
                  rounded-2xl shadow-xl z-20 px-4 py-6 text-center"
         >
@@ -119,7 +119,7 @@
                   {{ selected.sector }}
                 </span>
               </div>
-              <p class="text-brand-muted text-sm">{{ selected.code }} · 模擬資料</p>
+              <p class="text-brand-muted text-sm">{{ selected.code }} · TWSE 資料</p>
             </div>
           </div>
 
@@ -221,6 +221,7 @@ function onBlur() {
 
 function clearQuery() {
   query.value = ''
+  selected.value = null
   inputEl.value?.focus()
 }
 

@@ -98,7 +98,7 @@ DROP TABLE IF EXISTS dbo.users;
    - id：原 BIGINT UNSIGNED AUTO_INCREMENT → BIGINT IDENTITY(1,1)
    - email / password 為 ASCII，用 VARCHAR 即可（節省空間）
    - name / avatar 可能含中文或 emoji → 用 NVARCHAR
-   - created_at / updated_at 預設用 SYSDATETIME()（本機時間，學生專題夠用）
+   - created_at / updated_at 預設用 SYSDATETIME()（本機時間，目前專案範圍已足夠）
    ───────────────────────────────────────────────────────────────────────── */
 IF OBJECT_ID(N'dbo.users', N'U') IS NULL
 BEGIN

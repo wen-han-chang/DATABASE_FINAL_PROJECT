@@ -1,7 +1,7 @@
 /**
  * auth.js — 密碼雜湊與登入 token（零外部依賴，全用 Node 內建 crypto）
  *
- * 設計取捨（務實，符合期末專題範圍）：
+ * 設計取捨（務實，符合目前專案範圍）：
  * - schema 註解原寫「bcrypt hash」，但 bcrypt 是原生編譯套件，
  *   在 Node 18 / Windows 常常裝不起來。這裡改用 Node 內建的 scrypt，
  *   它同樣是業界認可的慢雜湊（KDF），且零依賴、跨平台。
