@@ -9,8 +9,8 @@
 ### 安裝與啟動
 
 ```bash
-# 1. 進入專案目錄
-cd db-course-final/frontend
+# 1. 從專案根目錄進入前端資料夾
+cd frontend
 
 # 2. 安裝相依套件
 npm install

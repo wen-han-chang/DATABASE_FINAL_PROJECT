@@ -121,6 +121,25 @@ export function getMarketImportPreview() {
 }
 
 /**
+ * 從「後端資料庫」讀某檔股票的日 K 線（首頁 K 線圖用）。
+ * 後端會查 SQL Server 的 stock_daily_bars 表回傳。
+ * 回傳格式：{ ok, source, code, count, data:[{date,open,high,low,close,volume}] }
+ */
+export function getDbBars(code) {
+  return requestJson(`/api/market/db-bars/${encodeURIComponent(code)}`)
+}
+
+/**
+ * 取單一檔「準即時」報價（後端打 TWSE MIS，且有 20 秒快取）。
+ * 回傳 { ok, data:{ code,name,price,prevClose,open,high,low,volume,
+ *                    time,change,changePct,closed,cached } }
+ * 使用者主動看某檔時才呼叫，不要一次全抓。
+ */
+export function getQuote(code) {
+  return requestJson(`/api/quote/${encodeURIComponent(code)}`)
+}
+
+/**
  * 通用 TWSE 代理入口。
  * path 會傳給 backend，再由 backend 轉給 TWSE 官方 API。
  */

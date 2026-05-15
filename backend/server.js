@@ -39,6 +39,8 @@ import {
   getPortfolio,
   buyStock,
   sellStock,
+  getStockBars,
+  getQuote,
 } from './dao.js'
 
 const PORT = Number(process.env.PORT || 3001)
@@ -276,6 +278,48 @@ const server = http.createServer(async (req, res) => {
      */
     if (req.method !== 'GET') {
       sendError(res, 405, 'Only GET is supported for TWSE routes.')
+      return
+    }
+
+    /**
+     * 從「資料庫」讀某檔股票的日 K 線（給首頁 K 線圖用）。
+     * 例：/api/market/db-bars/2330
+     * 這是公開 GET（行情資料，不需登入），與其他 /api/market/* 一致。
+     */
+    if (requestUrl.pathname.startsWith('/api/market/db-bars/')) {
+      const code = decodeURIComponent(
+        requestUrl.pathname.replace('/api/market/db-bars/', ''),
+      )
+      const refresh = requestUrl.searchParams.get('refresh') === '1'
+      try {
+        const bars = await getStockBars(code, { refresh })
+        sendJson(res, 200, {
+          ok: true,
+          source: 'ncu_db.stock_daily_bars',
+          code,
+          count: bars.length,
+          data: bars,
+        })
+      } catch (error) {
+        sendDaoError(res, error)
+      }
+      return
+    }
+
+    /**
+     * 單一檔「準即時」報價（TWSE MIS，後端有 20 秒快取）。
+     * 例：/api/quote/2330  公開 GET，不需登入。
+     */
+    if (requestUrl.pathname.startsWith('/api/quote/')) {
+      const code = decodeURIComponent(
+        requestUrl.pathname.replace('/api/quote/', ''),
+      )
+      try {
+        const quote = await getQuote(code)
+        sendJson(res, 200, { ok: true, data: quote })
+      } catch (error) {
+        sendDaoError(res, error)
+      }
       return
     }
 

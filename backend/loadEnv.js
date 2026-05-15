@@ -27,7 +27,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-// 取得本檔所在資料夾，組出同目錄下的 .env 絕對路徑
+// 由目前檔案位置推導 backend/.env，避免寫死任何組員電腦上的專案路徑
 const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const envPath = path.join(currentDir, '.env')
 
@@ -53,7 +53,7 @@ try {
     }
   }
 
-  console.log(`[env] Loaded ${envPath}`)
+  console.log('[env] Loaded backend/.env')
 } catch (error) {
   // 找不到 .env 不應讓整個 backend 掛掉，只提醒使用者
   console.warn(`[env] Could not load .env (${error.code || error.message}). ` +

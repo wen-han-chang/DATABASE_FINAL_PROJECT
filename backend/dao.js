@@ -19,6 +19,7 @@
 
 import { query, withTransaction, sql } from './db.js'
 import { hashPassword, verifyPassword, signToken } from './auth.js'
+import { fetchRecentHistory, fetchQuote } from './twseExtra.js'
 
 /**
  * 建一個帶 HTTP 狀態碼的錯誤，讓 server.js 能回對應狀態。
@@ -39,6 +40,170 @@ function calcFee(faceAmount) {
 function calcTax(faceAmount, isEtf) {
   // 證交稅：ETF 0.1%，一般股 0.3%
   return +(faceAmount * (isEtf ? 0.001 : 0.003)).toFixed(2)
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 行情：從資料庫讀某檔股票的日 K 線（給首頁 K 線圖用）
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * 依股票代碼，從 stock_daily_bars 撈出該檔所有日 K（由舊到新）。
+ *
+ * 這是「前端圖表的資料來自真實 SQL 查詢」的關鍵：
+ * 圖表資料先查這張表（JOIN stocks 用 code 找 stock_id，並走 trade_date 索引排序）。
+ * 如果 stock_sync 已經標成 twse，代表該檔已由 TWSE 歷史日線取代 seed 資料；
+ * 如果尚未同步或 TWSE 暫時抓不到，資料庫可能仍保留 seed 備援資料。
+ *
+ * @param {string} code 股票代碼，例如 '2330'
+ * @returns {Promise<Array<{date,open,high,low,close,volume}>>}
+ */
+// 只負責「從資料庫讀」某檔的日 K（排序、整理格式）
+async function readBarsFromDb(code) {
+  const rows = await query(
+    `SELECT b.trade_date AS d,
+            b.[open]  AS o,
+            b.high    AS h,
+            b.low     AS l,
+            b.[close] AS c,
+            b.volume  AS v
+     FROM dbo.stock_daily_bars b
+     JOIN dbo.stocks s ON s.id = b.stock_id
+     WHERE s.code = @code
+     ORDER BY b.trade_date ASC`,
+    { code },
+  )
+  return rows.map((r) => {
+    const dt = r.d instanceof Date ? r.d : new Date(r.d)
+    const y = dt.getFullYear()
+    const mo = String(dt.getMonth() + 1).padStart(2, '0')
+    const da = String(dt.getDate()).padStart(2, '0')
+    return {
+      date: `${y}-${mo}-${da}`,
+      open: Number(r.o),
+      high: Number(r.h),
+      low: Number(r.l),
+      close: Number(r.c),
+      volume: Number(r.v),
+    }
+  })
+}
+
+/**
+ * 取某檔日 K。核心策略：資料庫當「快取/真相來源」，TWSE 只在需要時補。
+ *
+ * 流程：
+ * 1. 用 code 找 stock_id（不在 stocks 表 → 回空陣列，前端會自動退回模擬）。
+ * 2. 看 stock_sync：沒同步過 / 來源還是 seed / 今天還沒同步過 / 指定強制，
+ *    就去 TWSE STOCK_DAY 抓最近約 13 個月真實日線。
+ * 3. 抓到 → 在「一個交易」內：刪掉該檔舊 bars、寫入真實 bars、更新 stock_sync。
+ *    抓失敗 → 不動資料庫（保留現有，下次再試），畫面仍可用既有資料。
+ * 4. 回傳資料庫裡該檔的日 K（給前端 K 線圖）。
+ *
+ * 「只在使用者看某檔時才抓、且每天每檔最多抓一次」→ 不會濫用官方資源。
+ *
+ * @param {string} code
+ * @param {{ refresh?: boolean }} opts refresh=true 強制重抓（demo 用）
+ */
+export async function getStockBars(code, opts = {}) {
+  const cleanCode = String(code || '').trim()
+  if (!cleanCode) throw httpError(400, '缺少股票代碼')
+
+  // 1) 找 stock_id
+  const sRows = await query('SELECT id FROM dbo.stocks WHERE code = @code', { code: cleanCode })
+  if (sRows.length === 0) return [] // 非已知股票 → 交給前端模擬 fallback
+  const stockId = sRows[0].id
+
+  // 2) 是否需要同步
+  const syncRows = await query(
+    `SELECT source,
+            CONVERT(date, last_synced) AS synced_date
+     FROM dbo.stock_sync WHERE stock_id = @sid`,
+    { sid: stockId },
+  )
+  const sync = syncRows[0]
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const syncedStr = sync?.synced_date
+    ? new Date(sync.synced_date).toISOString().slice(0, 10)
+    : null
+  const needSync =
+    opts.refresh === true ||
+    !sync ||
+    sync.source !== 'twse' ||
+    syncedStr !== todayStr
+
+  // 3) 需要就抓真實歷史並入庫
+  if (needSync) {
+    let realBars = []
+    try {
+      realBars = await fetchRecentHistory(cleanCode, 13)
+    } catch {
+      realBars = [] // 抓失敗 → 不動資料庫
+    }
+
+    if (realBars.length > 0) {
+      await withTransaction(async (tx) => {
+        // 換成真實資料：先刪該檔舊 bars
+        await new sql.Request(tx)
+          .input('sid', sql.SmallInt, stockId)
+          .query('DELETE FROM dbo.stock_daily_bars WHERE stock_id = @sid')
+
+        // 寫入真實 bars
+        for (const b of realBars) {
+          await new sql.Request(tx)
+            .input('sid', sql.SmallInt, stockId)
+            .input('d', sql.Date, b.date)
+            .input('o', sql.Decimal(10, 2), b.open)
+            .input('h', sql.Decimal(10, 2), b.high)
+            .input('l', sql.Decimal(10, 2), b.low)
+            .input('c', sql.Decimal(10, 2), b.close)
+            .input('v', sql.BigInt, b.volume)
+            .query(`INSERT INTO dbo.stock_daily_bars
+                      (stock_id, trade_date, [open], high, low, [close], volume)
+                    VALUES (@sid, @d, @o, @h, @l, @c, @v)`)
+        }
+
+        // 更新同步中繼表（沒有就新增，有就更新）
+        await new sql.Request(tx)
+          .input('sid', sql.SmallInt, stockId)
+          .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
+                     UPDATE dbo.stock_sync
+                        SET source = N'twse', last_synced = SYSDATETIME()
+                      WHERE stock_id = @sid;
+                   ELSE
+                     INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
+                     VALUES (@sid, N'twse', SYSDATETIME());`)
+      })
+    }
+  }
+
+  // 4) 回傳資料庫裡的資料
+  return readBarsFromDb(cleanCode)
+}
+
+// 即時報價的記憶體快取：同一檔 20 秒內不重複打 TWSE（避免濫用）
+const QUOTE_TTL_MS = 20000
+const quoteCache = new Map() // code -> { data, ts }
+
+/**
+ * 取單一檔準即時報價（TWSE MIS）。20 秒內重複查同一檔走快取。
+ * @param {string} code
+ */
+export async function getQuote(code) {
+  const cleanCode = String(code || '').trim()
+  if (!cleanCode) throw httpError(400, '缺少股票代碼')
+
+  const cached = quoteCache.get(cleanCode)
+  if (cached && Date.now() - cached.ts < QUOTE_TTL_MS) {
+    return { ...cached.data, cached: true }
+  }
+
+  try {
+    const data = await fetchQuote(cleanCode)
+    quoteCache.set(cleanCode, { data, ts: Date.now() })
+    return { ...data, cached: false }
+  } catch (e) {
+    throw httpError(502, e.message || '即時報價暫時無法取得')
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────

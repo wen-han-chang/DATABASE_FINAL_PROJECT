@@ -16,8 +16,20 @@
       </div>
     </div>
 
-    <!-- TWSE 真實資料展示：用來確認 backend + frontend 已經串通 -->
-    <TwseMarketPanel />
+    <!-- 後端串接驗證面板：預設隱藏，需要時才展開（給 demo / 除錯用，不干擾首頁） -->
+    <div>
+      <button
+        @click="showTwsePanel = !showTwsePanel"
+        class="text-xs text-brand-muted hover:text-brand-primary inline-flex items-center gap-1
+               border border-slate-200 rounded-lg px-3 py-1.5 bg-white"
+      >
+        <span>{{ showTwsePanel ? '▾' : '▸' }}</span>
+        後端 TWSE 串接驗證（{{ showTwsePanel ? '點此收起' : '點此展開' }}）
+      </button>
+      <div v-if="showTwsePanel" class="mt-3">
+        <TwseMarketPanel />
+      </div>
+    </div>
 
     <!-- AI Market Summary + proactive question -->
     <MarketAIView @open-drawer="openDrawer" />
@@ -53,9 +65,10 @@ import DecisionSandbox from '@/components/DecisionSandbox.vue'
 import KnowledgeDrawer from '@/components/KnowledgeDrawer.vue'
 import TwseMarketPanel from '@/components/TwseMarketPanel.vue'
 
-const store       = useInvestorStore()
-const drawerOpen  = ref(false)
-const drawerTerm  = ref('')
+const store        = useInvestorStore()
+const drawerOpen   = ref(false)
+const drawerTerm   = ref('')
+const showTwsePanel = ref(false)   // 後端串接驗證面板，預設隱藏
 
 const formattedDate = computed(() => {
   return new Date().toLocaleDateString('zh-TW', {

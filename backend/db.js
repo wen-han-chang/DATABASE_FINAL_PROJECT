@@ -80,8 +80,9 @@ export async function getPool() {
     // 建立連線池；連線失敗時把 poolPromise 清空，讓下次請求可重試
     poolPromise = new sql.ConnectionPool(config)
       .connect()
-      .then((pool) => {
+      .then(async (pool) => {
         console.log(`[db] Connected to SQL Server: ${config.server}:${config.port}/${config.database}`)
+        await ensureSchema(pool)
         return pool
       })
       .catch((error) => {
@@ -91,6 +92,30 @@ export async function getPool() {
   }
 
   return poolPromise
+}
+
+/**
+ * 連線後自動補建程式需要、但 schema.sql 不一定有的小表。
+ * 目的：使用者不必再去 SSMS 多跑一段（對新手零額外步驟）。
+ *
+ * stock_sync：記錄每檔股票的歷史資料「上次從 TWSE 同步的時間與來源」，
+ * 讓後端判斷「要不要重新去官方抓真實歷史」。這也是一張典型的
+ * ETL/同步中繼表，對資料庫專題本身就是個好範例。
+ */
+async function ensureSchema(pool) {
+  await pool.request().query(`
+    IF OBJECT_ID(N'dbo.stock_sync', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.stock_sync (
+        stock_id    SMALLINT      NOT NULL,
+        source      NVARCHAR(20)  NOT NULL CONSTRAINT df_stock_sync_src DEFAULT N'seed',
+        last_synced DATETIME2(0)  NOT NULL CONSTRAINT df_stock_sync_at  DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_stock_sync   PRIMARY KEY (stock_id),
+        CONSTRAINT fk_stock_sync_s FOREIGN KEY (stock_id)
+                                   REFERENCES dbo.stocks(id) ON DELETE CASCADE
+      );
+    END;
+  `)
 }
 
 /**

@@ -31,7 +31,7 @@
 ## 專案結構
 
 ```
-db-course-final/
+專案根目錄/
 ├── index.html
 ├── package.json
 ├── vite.config.js
@@ -77,8 +77,8 @@ db-course-final/
 ### 安裝與啟動
 
 ```bash
-# 1. 進入專案目錄
-cd db-course-final
+# 1. 如果目前在專案根目錄，先進入 frontend
+cd frontend
 
 # 2. 安裝相依套件
 npm install
