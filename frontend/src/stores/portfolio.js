@@ -1,196 +1,182 @@
 import { defineStore } from 'pinia'
-import { ref, computed, watch } from 'vue'
+import { ref, computed } from 'vue'
 import { findStock, getMockPrice } from '@/data/twStocks'
+import {
+  getPortfolioApi, setupPortfolioApi, resetPortfolioApi, buyApi, sellApi,
+} from '@/services/api'
 
-const STORAGE_KEY = 'invest_ai_portfolio'
+// 本地快取只負責讓畫面重整後先有資料；真正狀態仍以後端資料庫為準。
+const CACHE_KEY = 'invest_ai_portfolio'
 
-function now() {
-  return new Date().toLocaleString('zh-TW', {
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  })
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeHolding(h) {
+  const shares = Number(h.shares ?? ((h.lots ?? 0) * 1000))
+  return {
+    code: h.code,
+    name: h.name,
+    sector: h.sector,
+    shares,
+    avgCost: Number(h.avgCost),
+  }
+}
+
+function normalizeOrder(o) {
+  const shares = Number(o.shares ?? ((o.lots ?? 0) * 1000))
+  return {
+    id: o.id,
+    type: o.type,
+    code: o.code,
+    name: o.name,
+    shares,
+    price: Number(o.price),
+    faceAmount: Number(o.faceAmount ?? (shares * Number(o.price))),
+    fee: Number(o.fee),
+    tax: Number(o.tax || 0),
+    total: Number(o.total),
+    timestamp: o.timestamp,
+  }
+}
+
+function persistCache(state) {
+  localStorage.setItem(CACHE_KEY, JSON.stringify(state))
 }
 
 export const usePortfolioStore = defineStore('portfolio', () => {
-  // ── Core state ────────────────────────────────────────────
-  const capital  = ref(0)       // 使用者設定的初始資產
-  const cash     = ref(0)       // 現金可用餘額
-  const holdings = ref([])      // [{ code, name, sector, shares, avgCost }]  shares = 股
-  const orders   = ref([])      // 交易紀錄
-  const isReady  = ref(false)   // 已完成初始資產設定
+  const cached = loadCache()
 
-  // ── Restore from localStorage ─────────────────────────────
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (saved) {
-      const d = JSON.parse(saved)
-      capital.value  = d.capital  ?? 0
-      cash.value     = d.cash     ?? 0
-      holdings.value = (d.holdings ?? []).map(normalizeHolding)
-      orders.value   = (d.orders ?? []).map(normalizeOrder)
-      isReady.value  = d.isReady  ?? false
-    }
-  } catch { /* ignore */ }
+  const capital  = ref(Number(cached?.capital) || 0)
+  const cash     = ref(Number(cached?.cash) || 0)
+  const holdings = ref((cached?.holdings || []).map(normalizeHolding))
+  const orders   = ref((cached?.orders || []).map(normalizeOrder))
+  const isReady  = ref(!!cached?.isReady)
 
-  // ── Persist on change ─────────────────────────────────────
-  watch([capital, cash, holdings, orders, isReady], () => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      capital:  capital.value,
-      cash:     cash.value,
+  function saveLocalSnapshot() {
+    persistCache({
+      capital: capital.value,
+      cash: cash.value,
       holdings: holdings.value,
-      orders:   orders.value,
-      isReady:  isReady.value,
-    }))
-  }, { deep: true })
-
-  // ── Computed ──────────────────────────────────────────────
-  const holdingsWithValue = computed(() =>
-    holdings.value.map(h => {
-      const stock      = findStock(h.code)
-      const price      = stock ? getMockPrice(stock) : h.avgCost
-      const marketVal  = h.shares * price
-      const costVal    = h.shares * h.avgCost
-      const pnl        = marketVal - costVal
-      const pnlPct     = costVal > 0 ? (pnl / costVal) * 100 : 0
-      return { ...h, price, marketVal, costVal, pnl, pnlPct }
+      orders: orders.value,
+      isReady: isReady.value,
     })
+  }
+
+  /**
+   * 從後端載入完整投資組合。
+   * 後端資料表目前依原始資料表設計存 lots（張），前端畫面統一顯示 shares（股）。
+   */
+  async function load() {
+    try {
+      const data = await getPortfolioApi()
+      capital.value = Number(data.capital) || 0
+      cash.value = Number(data.cash) || 0
+      isReady.value = !!data.isReady
+      holdings.value = (data.holdings || []).map(normalizeHolding)
+      orders.value = (data.orders || []).map(normalizeOrder)
+      saveLocalSnapshot()
+    } catch {
+      // 後端暫時未開時保留本地快取，避免畫面瞬間清空。
+    }
+  }
+
+  const holdingsWithValue = computed(() =>
+    holdings.value.map((h) => {
+      const stock = findStock(h.code)
+      const price = stock ? getMockPrice(stock) : h.avgCost
+      const marketVal = h.shares * price
+      const costVal = h.shares * h.avgCost
+      const pnl = marketVal - costVal
+      const pnlPct = costVal > 0 ? (pnl / costVal) * 100 : 0
+      return { ...h, price, marketVal, costVal, pnl, pnlPct }
+    }),
   )
 
   const totalHoldingsValue = computed(() =>
-    holdingsWithValue.value.reduce((s, h) => s + h.marketVal, 0)
+    holdingsWithValue.value.reduce((s, h) => s + h.marketVal, 0),
   )
-
   const totalAssets = computed(() => cash.value + totalHoldingsValue.value)
-  const totalPnL    = computed(() => totalAssets.value - capital.value)
+  const totalPnL = computed(() => totalAssets.value - capital.value)
   const totalPnLPct = computed(() =>
-    capital.value > 0 ? (totalPnL.value / capital.value) * 100 : 0
+    capital.value > 0 ? (totalPnL.value / capital.value) * 100 : 0,
   )
 
-  // ── Actions ───────────────────────────────────────────────
-  function setup(amount) {
-    capital.value  = amount
-    cash.value     = amount
-    holdings.value = []
-    orders.value   = []
-    isReady.value  = true
+  async function setup(amount) {
+    await setupPortfolioApi(amount)
+    await load()
   }
 
-  function reset() {
-    capital.value  = 0
-    cash.value     = 0
+  async function reset() {
+    await resetPortfolioApi()
+    capital.value = 0
+    cash.value = 0
     holdings.value = []
-    orders.value   = []
-    isReady.value  = false
-    localStorage.removeItem(STORAGE_KEY)
+    orders.value = []
+    isReady.value = false
+    localStorage.removeItem(CACHE_KEY)
   }
 
-  // 計算手續費（買賣雙向）
   function calcFee(amount) {
     return Math.max(20, amount * 0.001425)
   }
 
-  // 計算證交稅（賣出時）
   function calcTax(amount, code) {
-    // ETF 稅率 0.1%，一般股票 0.3%
-    const isETF = ['0050','0056','00878','006208'].includes(code)
+    const isETF = ['0050', '0056', '00878', '006208'].includes(code)
     return amount * (isETF ? 0.001 : 0.003)
   }
 
-  function buy(stock, shares, price) {
-    const faceAmount = shares * price
-    const fee        = calcFee(faceAmount)
-    const totalCost  = faceAmount + fee
-
-    if (cash.value < totalCost) {
-      return { ok: false, msg: `現金不足，需 ${fmt(totalCost)} 元，可用 ${fmt(cash.value)} 元` }
+  function sharesToLots(shares) {
+    const nShares = Number(shares)
+    if (!Number.isInteger(nShares) || nShares <= 0) {
+      return { ok: false, msg: '下單股數必須是正整數' }
     }
-
-    cash.value -= totalCost
-
-    const idx = holdings.value.findIndex(h => h.code === stock.code)
-    if (idx >= 0) {
-      const h = holdings.value[idx]
-      const newAvg = (h.shares * h.avgCost + shares * price) / (h.shares + shares)
-      holdings.value[idx] = { ...h, shares: h.shares + shares, avgCost: +newAvg.toFixed(4) }
-    } else {
-      holdings.value.push({
-        code: stock.code, name: stock.name, sector: stock.sector,
-        shares, avgCost: price,
-      })
+    if (nShares % 1000 !== 0) {
+      return { ok: false, msg: '目前後端資料表以「張」為交易單位，暫不支援零股下單' }
     }
-
-    orders.value.unshift({
-      id: Date.now(), type: 'buy',
-      code: stock.code, name: stock.name,
-      shares, price,
-      faceAmount, fee, tax: 0,
-      total: totalCost,
-      timestamp: now(),
-    })
-
-    return { ok: true, msg: `買入 ${stock.name} ${fmt(shares)} 股，扣款 ${fmt(totalCost)} 元（含手續費 ${fmt(fee)} 元）` }
+    return { ok: true, lots: nShares / 1000 }
   }
 
-  function sell(stock, shares, price) {
-    const idx = holdings.value.findIndex(h => h.code === stock.code)
-    if (idx < 0 || holdings.value[idx].shares < shares) {
-      const held = idx >= 0 ? holdings.value[idx].shares : 0
-      return { ok: false, msg: `持股不足，目前持有 ${fmt(held)} 股` }
+  async function buy(stock, shares, price) {
+    const converted = sharesToLots(shares)
+    if (!converted.ok) return converted
+
+    try {
+      const r = await buyApi({ code: stock.code, lots: converted.lots, price })
+      await load()
+      return { ok: true, msg: r.msg }
+    } catch (e) {
+      return { ok: false, msg: e.message }
     }
+  }
 
-    const faceAmount = shares * price
-    const fee        = calcFee(faceAmount)
-    const tax        = calcTax(faceAmount, stock.code)
-    const received   = faceAmount - fee - tax
+  async function sell(stock, shares, price) {
+    const converted = sharesToLots(shares)
+    if (!converted.ok) return converted
 
-    cash.value += received
-
-    const h = holdings.value[idx]
-    if (h.shares === shares) {
-      holdings.value.splice(idx, 1)
-    } else {
-      holdings.value[idx] = { ...h, shares: h.shares - shares }
+    try {
+      const r = await sellApi({ code: stock.code, lots: converted.lots, price })
+      await load()
+      return { ok: true, msg: r.msg }
+    } catch (e) {
+      return { ok: false, msg: e.message }
     }
-
-    orders.value.unshift({
-      id: Date.now(), type: 'sell',
-      code: stock.code, name: stock.name,
-      shares, price,
-      faceAmount, fee, tax,
-      total: received,
-      timestamp: now(),
-    })
-
-    return { ok: true, msg: `賣出 ${stock.name} ${fmt(shares)} 股，到帳 ${fmt(received)} 元（手續費 ${fmt(fee)} 元，證交稅 ${fmt(tax)} 元）` }
   }
 
   function getHolding(code) {
-    return holdings.value.find(h => h.code === code) ?? null
+    return holdings.value.find((h) => h.code === code) ?? null
   }
 
   return {
     capital, cash, holdings, orders, isReady,
     holdingsWithValue, totalHoldingsValue,
     totalAssets, totalPnL, totalPnLPct,
-    setup, reset, buy, sell, getHolding,
+    load, setup, reset, buy, sell, getHolding,
     calcFee, calcTax,
   }
 })
-
-function fmt(n) {
-  return Math.round(n).toLocaleString('zh-TW')
-}
-
-function normalizeHolding(h) {
-  const shares = h.shares ?? ((h.lots ?? 0) * 1000)
-  const { lots, ...rest } = h
-  return { ...rest, shares }
-}
-
-function normalizeOrder(o) {
-  const shares = o.shares ?? ((o.lots ?? 0) * 1000)
-  const faceAmount = o.faceAmount ?? (shares * o.price)
-  const { lots, ...rest } = o
-  return { ...rest, shares, faceAmount }
-}

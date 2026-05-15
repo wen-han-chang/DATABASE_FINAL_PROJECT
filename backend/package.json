@@ -1,0 +1,14 @@
+{
+  "name": "database-final-project-backend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Backend API for fetching TWSE market data and serving the ncu_db SQL Server database.",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "mssql": "^10.0.4"
+  }
+}

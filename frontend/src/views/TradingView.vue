@@ -476,7 +476,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import {
   Wallet, PiggyBank, Search, X, ShoppingCart,
   RotateCcw, AlertTriangle, CheckCircle2, AlertCircle,
@@ -498,13 +498,26 @@ const capitalPresets = [
   { label: '500萬', value: 5000000 },
 ]
 
-function doSetup() {
+// 進入交易頁先從後端載入投資組合（持股 / 委託 / 現金）
+onMounted(() => {
+  portfolio.load()
+})
+
+async function doSetup() {
   if (!setupAmount.value || setupAmount.value < 10000) return
-  portfolio.setup(setupAmount.value)
+  try {
+    await portfolio.setup(setupAmount.value)
+  } catch (e) {
+    showToast(false, `設定失敗：${e.message}`)
+  }
 }
 
-function doReset() {
-  portfolio.reset()
+async function doReset() {
+  try {
+    await portfolio.reset()
+  } catch (e) {
+    showToast(false, `重置失敗：${e.message}`)
+  }
   confirmReset.value = false
   activeStock.value  = null
   query.value        = ''
@@ -670,6 +683,9 @@ const totalAmount = computed(() =>
 
 const validationMsg = computed(() => {
   if (!activeStock.value || qty.value < 1) return ''
+  if (tradeMode.value === 'share') {
+    return '目前後端資料表以「張」為交易單位，暫不支援零股下單'
+  }
   if (orderType.value === 'buy' && portfolio.cash < totalAmount.value) {
     return `現金不足，需 ${fmt(totalAmount.value)} 元（可用 ${fmt(portfolio.cash)} 元）`
   }
@@ -688,7 +704,7 @@ const canOrder = computed(() =>
 )
 
 // ── Place order ────────────────────────────────────────────
-function placeOrder() {
+async function placeOrder() {
   if (!canOrder.value) return
   const result = orderType.value === 'buy'
     ? portfolio.buy(activeStock.value, actualShares.value, mockPrice.value)

@@ -4,7 +4,7 @@
     <div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-slate-100">
       <div class="flex items-center gap-2">
         <span class="font-bold text-brand-primary text-sm">{{ stock.code }}</span>
-        <span class="text-xs text-brand-muted">{{ stock.name }} · 模擬資料</span>
+        <span class="text-xs text-brand-muted">{{ stock.name }} · {{ dataSourceLabel }}</span>
         <span class="text-[11px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
           {{ stock.sector }}
         </span>
@@ -38,6 +38,11 @@
       </div>
     </div>
 
+    <!-- 即時報價條（圖表本身不變，只是上方多一條準即時數值） -->
+    <div class="px-4 py-2 border-b border-slate-100">
+      <LiveQuote :code="stock.code" />
+    </div>
+
     <!-- Chart -->
     <div ref="chartEl" :style="{ height: height + 'px', width: '100%' }" />
   </div>
@@ -47,6 +52,8 @@
 import { ref, reactive, watch, onMounted, onBeforeUnmount, shallowRef } from 'vue'
 import * as echarts from 'echarts'
 import { seedFromCode } from '@/data/twStocks'
+import { getDbBars } from '@/services/twseApi'
+import LiveQuote from '@/components/LiveQuote.vue'
 
 const props = defineProps({
   stock: {
@@ -167,6 +174,31 @@ const chartEl      = ref(null)
 const chart        = shallowRef(null)
 const activePeriod = ref('day')
 
+// 圖表資料：優先從後端資料庫(stock_daily_bars)取得；
+// 後端沒開或查不到時，自動退回前端自己產生，確保圖表永遠畫得出來。
+const dailyData       = shallowRef([])
+const dataSourceLabel = ref('模擬資料')
+
+async function loadData() {
+  try {
+    const res = await getDbBars(props.stock.code)
+    if (res?.data?.length) {
+      dailyData.value = res.data
+      // 後端會把該檔換成 TWSE 真實歷史並存進資料庫，故標示來源為資料庫
+      dataSourceLabel.value = '來源:資料庫(TWSE 歷史)'
+    } else {
+      // 資料庫沒有這檔（例如不在已灌入的 50 檔）→ 退回前端產生
+      dailyData.value = generateDailyData(props.stock)
+      dataSourceLabel.value = '模擬資料（備援）'
+    }
+  } catch {
+    // 後端未啟動或連線失敗 → 退回前端產生，畫面不中斷
+    dailyData.value = generateDailyData(props.stock)
+    dataSourceLabel.value = '模擬資料（後端未連，備援）'
+  }
+  redraw()
+}
+
 const periods = [
   { key: 'day',   label: '日K' },
   { key: 'week',  label: '週K' },
@@ -186,7 +218,10 @@ const UP   = '#EF4444'
 const DOWN = '#22C55E'
 
 function buildOption() {
-  const rawData = generateDailyData(props.stock)
+  // 有從後端拿到資料就用；還沒拿到（首次渲染瞬間）先用前端產生的墊著
+  const rawData = dailyData.value.length
+    ? dailyData.value
+    : generateDailyData(props.stock)
   const candles = aggregateCandles(rawData, activePeriod.value)
   const dates   = candles.map(c => c.date)
   const closes  = candles.map(c => c.close)
@@ -314,17 +349,18 @@ function redraw() {
 
 watch(activePeriod, redraw)
 
-// Re-generate data when stock changes
+// 換股票時，重新跟後端要該檔的資料
 watch(() => props.stock.code, () => {
   activePeriod.value = 'day'
-  redraw()
+  loadData()
 })
 
 let resizeObserver = null
 
 onMounted(() => {
   chart.value = echarts.init(chartEl.value, null, { renderer: 'canvas' })
-  chart.value.setOption(buildOption())
+  chart.value.setOption(buildOption())   // 先用前端墊圖，畫面不空白
+  loadData()                              // 再跟後端資料庫要正式資料並重畫
   resizeObserver = new ResizeObserver(() => chart.value?.resize())
   resizeObserver.observe(chartEl.value)
 })
