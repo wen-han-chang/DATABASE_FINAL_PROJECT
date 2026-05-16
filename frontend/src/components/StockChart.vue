@@ -261,16 +261,35 @@ function buildOption() {
       formatter(params) {
         const k = params.find(p => p.seriesType === 'candlestick')
         if (!k) return ''
-        const [o, c, l, h] = k.value
-        const arrow = c >= o
-          ? `<span style="color:${UP}">▲</span>`
-          : `<span style="color:${DOWN}">▼</span>`
+        // ECharts 蠟燭圖在類別軸下，k.value 可能是 [索引, 開, 收, 低, 高]（最前面多一個 x 索引），
+        // k.data 才是原始的 [開, 收, 低, 高]。優先用 k.data；退而求其次取末 4 個避免位移。
+        const raw = Array.isArray(k.data) && k.data.length >= 4 ? k.data : k.value
+        const [o, c, l, h] = raw.slice(-4)
+        // 台股慣例：開、高、低、收各自和「前一交易日收盤價」比較上色：
+        //   > 前日收 → 紅(漲)；< 前日收 → 綠(跌)；= 前日收 → 白(預設色，不上色)
+        // 前一交易日收盤 = 同序列前一根 K 的收盤（candles 與此 formatter 同作用域）。
+        const idx = k.dataIndex
+        const prevClose = idx > 0 && candles[idx - 1] ? candles[idx - 1].close : null
+        const colorOf = (v) => {
+          if (prevClose == null || v === prevClose) return '' // 等於或無前日 → 白(預設)
+          return v > prevClose ? UP : DOWN
+        }
+        const cellStyle = (v, bold) => {
+          const col = colorOf(v)
+          return `padding-left:8px;${bold ? 'font-weight:700;' : ''}${col ? `color:${col};` : ''}`
+        }
+        // 標題箭頭依「收盤 vs 前日收盤」；等於或無前日資料則不顯示箭頭
+        const arrow = prevClose == null || c === prevClose
+          ? ''
+          : c > prevClose
+            ? `<span style="color:${UP}">▲</span>`
+            : `<span style="color:${DOWN}">▼</span>`
         let html = `<div style="font-weight:700;margin-bottom:6px">${k.name} ${arrow}</div>`
         html += `<table style="font-size:11px;line-height:2;border-spacing:0">
-          <tr><td style="color:#94A3B8">開&nbsp;</td><td style="padding-left:8px">${o}</td></tr>
-          <tr><td style="color:#94A3B8">高&nbsp;</td><td style="padding-left:8px;color:${UP}">${h}</td></tr>
-          <tr><td style="color:#94A3B8">低&nbsp;</td><td style="padding-left:8px;color:${DOWN}">${l}</td></tr>
-          <tr><td style="color:#94A3B8">收&nbsp;</td><td style="padding-left:8px;font-weight:700">${c}</td></tr>
+          <tr><td style="color:#94A3B8">開&nbsp;</td><td style="${cellStyle(o)}">${o}</td></tr>
+          <tr><td style="color:#94A3B8">高&nbsp;</td><td style="${cellStyle(h)}">${h}</td></tr>
+          <tr><td style="color:#94A3B8">低&nbsp;</td><td style="${cellStyle(l)}">${l}</td></tr>
+          <tr><td style="color:#94A3B8">收&nbsp;</td><td style="${cellStyle(c, true)}">${c}</td></tr>
         </table>`
         params.filter(p => p.seriesType === 'line' && p.value != null).forEach(p => {
           html += `<div style="color:${p.color};font-size:11px;margin-top:2px">${p.seriesName}: ${p.value}</div>`

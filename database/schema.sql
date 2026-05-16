@@ -380,6 +380,31 @@ END;
 GO
 
 
+/* ─────────────────────────────────────────────────────────────────────────
+   14. stock_sync — 股票歷史「同步狀態」中繼表（原始設計沒有，後來新增）
+   ─────────────────────────────────────────────────────────────────────────
+   用途：記錄每檔股票的歷史日線「上次從 TWSE 同步的時間與來源」，讓後端判斷
+         要不要重新去官方抓真實歷史（seed 佔位 → twse 真實 的切換依據）。
+   - source: 'seed'（初始佔位）/ 'twse-partial'（近期已換真實、完整版背景補）/
+             'twse'（完整真實歷史就緒）
+   - 後端 db.js 啟動時也會自動補建這張表（程式端 ensureSchema），
+     所以就算忘了在 SSMS 跑這段，後端開起來也會自動建立；此處列出是為了
+     讓手動建表 / 交接的組員看得到完整結構。
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.stock_sync', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.stock_sync (
+        stock_id    SMALLINT      NOT NULL,
+        source      NVARCHAR(20)  NOT NULL CONSTRAINT df_stock_sync_src DEFAULT N'seed',
+        last_synced DATETIME2(0)  NOT NULL CONSTRAINT df_stock_sync_at  DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_stock_sync   PRIMARY KEY (stock_id),
+        CONSTRAINT fk_stock_sync_s FOREIGN KEY (stock_id)
+                                   REFERENCES dbo.stocks(id) ON DELETE CASCADE
+    );
+END;
+GO
+
+
 /* ============================================================================
    Section 3：額外索引（對應原 schema 的「重要索引建議」）
    ----------------------------------------------------------------------------
@@ -469,7 +494,9 @@ GO
 /* ============================================================================
    Section 5：驗證 — 列出所有資料表與目前筆數
    ----------------------------------------------------------------------------
-   執行後在「結果」視窗應看到 13 列、row_count 皆為 0，代表 13 張表都建好且為空。
+   執行後在「結果」視窗應看到 14 列（13 張核心表 + stock_sync）。
+   全新安裝時 row_count 多半為 0；若已被使用過，stock_daily_bars / stock_sync
+   可能已有真實資料，屬正常。
    ============================================================================ */
 SELECT
     t.name                                   AS table_name,
@@ -479,7 +506,8 @@ INNER JOIN sys.partitions p ON t.object_id = p.object_id
 WHERE t.name IN (
     'users','investor_profiles','sectors','stocks','stock_daily_bars',
     'portfolios','holdings','orders','decision_cards','decision_card_tags',
-    'knowledge_base','knowledge_sentences','knowledge_related_tags'
+    'knowledge_base','knowledge_sentences','knowledge_related_tags',
+    'stock_sync'
 )
 GROUP BY t.name
 ORDER BY t.name;
