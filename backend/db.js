@@ -96,11 +96,11 @@ export async function getPool() {
 
 /**
  * 連線後自動補建程式需要、但 schema.sql 不一定有的小表。
- * 目的：使用者不必再去 SSMS 多跑一段（對新手零額外步驟）。
+ * 目的：使用者不必再去 SSMS 多跑一段，降低環境建置成本。
  *
  * stock_sync：記錄每檔股票的歷史資料「上次從 TWSE 同步的時間與來源」，
  * 讓後端判斷「要不要重新去官方抓真實歷史」。這也是一張典型的
- * ETL/同步中繼表，對資料庫專題本身就是個好範例。
+ * ETL/同步中繼表，可清楚呈現資料同步狀態。
  */
 async function ensureSchema(pool) {
   await pool.request().query(`

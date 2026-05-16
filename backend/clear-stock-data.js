@@ -2,7 +2,7 @@
  * clear-stock-data.js — 清除資料庫的「股票資料」（需手動輸入 yes 才執行）
  *
  * 會刪除的（只動股票行情/快取資料，不碰帳號與交易）：
- *   - dbo.stock_daily_bars  （所有日 K 線：seed 模擬 + 已抓的 TWSE 真實）
+ *   - dbo.stock_daily_bars  （所有日 K 線：seed 測試行情 + 已抓的 TWSE 真實）
  *   - dbo.stock_sync        （每檔的同步狀態）
  *
  * 不會刪除：

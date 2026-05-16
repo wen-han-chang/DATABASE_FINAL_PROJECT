@@ -189,7 +189,7 @@ GET /api/market/db-bars/2330
 |--------|------|----------|
 | `source = ncu_db.stock_daily_bars` | 後端回傳 SQL Server 內已同步完成的 TWSE 歷史資料 | 標示為資料庫 TWSE 歷史 |
 | `source = ncu_db.stock_daily_bars.stale` | 資料庫已有 TWSE 歷史，但今天尚未補最新近期資料 | 仍可直接畫圖，背景補資料即可 |
-| `source = twse.stock_day.quick` | 資料庫尚無 TWSE 歷史，後端先回最近約 2 個月真實資料 | 可先畫近期圖，不要標成模擬資料 |
+| `source = twse.stock_day.quick` | 資料庫尚無 TWSE 歷史，後端先回最近約 2 個月真實資料 | 可先畫近期圖，不要標成測試資料 |
 | `historyStatus = complete` | 前端已有完整可用歷史資料 | 不顯示載入提示 |
 | `historyStatus = partial_loading` | 目前先有近期真實資料，背景仍可能補完整歷史 | 可畫圖；如果要提示，提示應避免遮住主要畫面 |
 | `historyStatus = loading` | 目前還沒有可畫的真實 K 線 | 才顯示「真實歷史資料載入中」 |

@@ -241,7 +241,7 @@ const hotStocks = TW_STOCKS.filter(s =>
   ['2330','2454','2382','0050','2603','3008','2317','2327'].includes(s.code)
 )
 
-// ── Mock latest price stats ───────────────────
+// ── Practice price stats ──────────────────────
 // Derive deterministic values from the seeded PRNG last bar
 function getLastTwoBars(stock) {
   // Small inline re-generation of just last 2 closes

@@ -1,6 +1,6 @@
 <template>
   <section class="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 space-y-4">
-    <!-- 標題區：讓使用者知道這是實際串接後端資料，不是模擬資料 -->
+    <!-- 標題區：讓使用者知道這是實際串接後端資料，不是測試資料 -->
     <div class="flex items-start justify-between gap-4">
       <div>
         <h2 class="text-lg font-bold text-brand-primary">TWSE 市場資料</h2>

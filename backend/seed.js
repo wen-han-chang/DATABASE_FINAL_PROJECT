@@ -5,13 +5,13 @@
  *   把 sectors / stocks / stock_daily_bars 三張表灌入可重現的資料，
  *   讓 orders、holdings 的外鍵（stock_id）有對象，買賣才跑得起來。
  *
- * ⚠️ 資料性質聲明（重要，符合研究倫理）：
+ * ⚠️ 資料性質聲明（重要，避免誤用）：
  *   - 股票「代碼、名稱、產業別」沿用本專案前端 frontend/src/data/twStocks.js
  *     的既有清單，取「前 50 檔」（含 0050 等 4 檔 ETF）。
  *   - 股票的 base_price / volatility，以及產生的 stock_daily_bars（OHLCV），
- *     全部是「模擬資料」，不是真實市場行情。演算法沿用前端原本的
- *     Mulberry32 PRNG + 幾何布朗運動（GBM），確保前端 K 線圖與 DB 一致。
- *   - 正式報告若要呈現真實行情，需另接資料源替換，不可把此模擬資料當真。
+ *     全部是「測試行情資料」，不是真實市場行情。演算法沿用前端原本的
+ *     Mulberry32 PRNG + 幾何布朗運動（GBM），確保資料可重現。
+ *   - 產品展示若要呈現真實行情，需使用 TWSE 同步後的資料，不可把測試行情資料當真。
  *
  * 如何執行：
  *   cd backend
@@ -37,7 +37,7 @@ import { hashPassword } from './auth.js'
 
 // ──────────────────────────────────────────────────────────────────────────
 // 1. 台灣前 50 檔（鏡像自 frontend/src/data/twStocks.js 的前 50 筆）
-//    欄位：code 代碼 / name 名稱 / price 模擬起始價 / vol 波動係數 / sector 產業
+//    欄位：code 代碼 / name 名稱 / price 測試起始價 / vol 波動係數 / sector 產業
 // ──────────────────────────────────────────────────────────────────────────
 const TOP50 = [
   { code: '2330', name: '台積電',   price: 580,  vol: 0.020, sector: '半導體' },
@@ -98,7 +98,7 @@ const ETF_CODES = new Set(['0050', '0056', '00878', '006208'])
 // 每檔產生幾根日 K（與前端 getMockPrice 的 300 步一致）
 const BARS_PER_STOCK = 300
 
-// 模擬 K 線的「結束日」= 今天；往回推 BARS_PER_STOCK 個交易日（跳週末）
+// 測試 K 線的「結束日」= 今天；往回推 BARS_PER_STOCK 個交易日（跳週末）
 const SEED_END_DATE = new Date('2026-05-15')
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ function boxMuller(rand) {
 }
 
 /**
- * 產生某一檔股票的 300 根模擬日 K。
+ * 產生某一檔股票的 300 根可重現測試日 K。
  * close 序列與前端 getMockPrice 完全相同；OHLC 的高低點再用同一個亂數源
  * 加一點日內振幅，保持「可重現」。
  *
@@ -154,7 +154,7 @@ function generateDailyBars(stock, tradeDates) {
     m = m * 0.93 + lr
     const close = p
 
-    // 日內高低：用同一亂數源產生 0~1，套一點振幅（模擬，可重現）
+    // 日內高低：用同一亂數源產生 0~1，套一點振幅（測試行情，可重現）
     const span = Math.abs(lr) + v * 0.5
     const hi = Math.max(open, close) * (1 + span * (0.3 + rand() * 0.7))
     const lo = Math.min(open, close) * (1 - span * (0.3 + rand() * 0.7))

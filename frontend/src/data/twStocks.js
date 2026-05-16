@@ -1,5 +1,5 @@
-// 台灣上市主要個股清單（模擬資料用）
-// price: 模擬起始股價, vol: 個股波動率係數, sector: 產業別
+// 台灣上市主要個股清單（搜尋與下單練習參考用）
+// price: 練習參考起始股價, vol: 個股波動率係數, sector: 產業別
 export const TW_STOCKS = [
   { code: '2330', name: '台積電',   price: 580,  vol: 0.020, sector: '半導體' },
   { code: '2317', name: '鴻海',     price: 110,  vol: 0.022, sector: '電子製造' },
@@ -90,7 +90,7 @@ export function findStock(code) {
   return TW_STOCKS.find(s => s.code === code) ?? null
 }
 
-// 取得模擬收盤價（跑 300 步 PRNG，結果 memoize 避免重複運算）
+// 取得下單練習參考收盤價（跑 300 步 PRNG，結果 memoize 避免重複運算）
 const _priceCache = new Map()
 
 export function getMockPrice(stock) {
