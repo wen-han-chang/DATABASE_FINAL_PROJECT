@@ -139,18 +139,28 @@
                   <div v-if="showDrop && searchResults.length"
                     class="absolute top-full left-0 right-0 mt-1.5 bg-white border border-slate-200
                            rounded-xl shadow-xl z-20 overflow-hidden">
-                    <button v-for="(s, i) in searchResults" :key="s.code"
-                      @mousedown.prevent="pickStock(s)"
+                    <div v-for="(s, i) in searchResults" :key="s.code"
                       @mouseover="hlIdx = i"
-                      class="w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors border-b border-slate-50 last:border-0"
+                      class="flex items-center border-b border-slate-50 last:border-0 transition-colors"
                       :class="hlIdx === i ? 'bg-blue-50' : 'hover:bg-slate-50'">
-                      <span class="w-14 text-center text-xs font-bold py-0.5 rounded-md flex-shrink-0"
-                        :class="hlIdx === i ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600'">
-                        {{ s.code }}
-                      </span>
-                      <span class="text-sm font-medium text-brand-primary flex-1 truncate">{{ s.name }}</span>
-                      <span class="text-xs text-brand-muted flex-shrink-0">{{ s.sector }}</span>
-                    </button>
+                      <button
+                        @mousedown.prevent="pickStock(s)"
+                        class="flex items-center gap-3 px-3 py-2.5 text-left flex-1 min-w-0">
+                        <span class="w-14 text-center text-xs font-bold py-0.5 rounded-md flex-shrink-0"
+                          :class="hlIdx === i ? 'bg-blue-500 text-white' : 'bg-slate-100 text-slate-600'">
+                          {{ s.code }}
+                        </span>
+                        <span class="text-sm font-medium text-brand-primary flex-1 truncate">{{ s.name }}</span>
+                        <span class="text-xs text-brand-muted flex-shrink-0">{{ s.sector }}</span>
+                      </button>
+                      <button
+                        @mousedown.prevent="watchlist.toggle(s)"
+                        class="px-3 py-2.5 flex-shrink-0 transition-colors"
+                        :class="watchlist.isWatched(s.code) ? 'text-amber-400' : 'text-slate-300 hover:text-amber-300'"
+                        :title="watchlist.isWatched(s.code) ? '移出自選' : '加入自選'">
+                        <Star class="w-3.5 h-3.5" :fill="watchlist.isWatched(s.code) ? 'currentColor' : 'none'" />
+                      </button>
+                    </div>
                   </div>
                 </Transition>
               </div>
@@ -159,9 +169,15 @@
               <Transition name="fade">
                 <div v-if="activeStock" class="pt-1 space-y-3">
                   <div class="flex items-center justify-between">
-                    <div>
+                    <div class="flex items-center gap-2">
                       <span class="font-bold text-brand-primary">{{ activeStock.name }}</span>
-                      <span class="text-xs text-brand-muted ml-2">{{ activeStock.code }}</span>
+                      <span class="text-xs text-brand-muted">{{ activeStock.code }}</span>
+                      <button @click="watchlist.toggle(activeStock)"
+                        class="transition-colors"
+                        :class="watchlist.isWatched(activeStock.code) ? 'text-amber-400' : 'text-slate-300 hover:text-amber-300'"
+                        :title="watchlist.isWatched(activeStock.code) ? '移出自選' : '加入自選'">
+                        <Star class="w-4 h-4" :fill="watchlist.isWatched(activeStock.code) ? 'currentColor' : 'none'" />
+                      </button>
                     </div>
                     <div class="text-right">
                       <div v-if="quoteLoading" class="text-xs text-brand-muted animate-pulse">載入報價中…</div>
@@ -317,7 +333,7 @@
 
             <!-- Tab bar -->
             <div class="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
-              <button v-for="tab in ['持股明細', '交易紀錄']" :key="tab"
+              <button v-for="tab in ['持股明細', '交易紀錄', '自選清單']" :key="tab"
                 @click="activeTab = tab"
                 class="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
                 :class="activeTab === tab
@@ -327,6 +343,10 @@
                 <span v-if="tab === '持股明細' && portfolio.holdings.length"
                   class="ml-1.5 text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded-full">
                   {{ portfolio.holdings.length }}
+                </span>
+                <span v-if="tab === '自選清單' && watchlist.items.length"
+                  class="ml-1.5 text-xs bg-amber-400 text-white px-1.5 py-0.5 rounded-full">
+                  {{ watchlist.items.length }}
                 </span>
               </button>
             </div>
@@ -397,7 +417,7 @@
               </div>
 
               <!-- Order history -->
-              <div v-else key="history">
+              <div v-else-if="activeTab === '交易紀錄'" key="history">
                 <div v-if="portfolio.orders.length === 0"
                   class="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
                   <ClipboardList class="w-10 h-10 mx-auto text-slate-300 mb-3" />
@@ -438,6 +458,51 @@
                           </p>
                           <p class="text-xs text-brand-muted">手續費 {{ fmt(o.fee) }}</p>
                           <p v-if="o.tax > 0" class="text-xs text-brand-muted">證交稅 {{ fmt(o.tax) }}</p>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <!-- Watchlist -->
+              <div v-else key="watchlist">
+                <div v-if="watchlist.items.length === 0"
+                  class="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
+                  <Star class="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                  <p class="text-brand-muted text-sm">尚無自選股</p>
+                  <p class="text-xs text-slate-400 mt-1">搜尋股票時點擊 ★ 加入自選</p>
+                </div>
+                <div v-else class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-slate-100 bg-slate-50">
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-brand-muted">個股</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-brand-muted">產業</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-brand-muted">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="w in watchlist.items" :key="w.code"
+                        class="border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
+                        <td class="px-4 py-3.5">
+                          <p class="font-semibold text-brand-primary">{{ w.name }}</p>
+                          <p class="text-xs text-brand-muted">{{ w.code }}</p>
+                        </td>
+                        <td class="px-4 py-3.5 text-xs text-brand-muted">{{ w.sector }}</td>
+                        <td class="px-4 py-3.5 text-right">
+                          <div class="flex items-center justify-end gap-2">
+                            <button @click="quickSelect(w.code); activeTab = '持股明細'"
+                              class="text-xs px-3 py-1.5 rounded-lg bg-blue-500 text-white font-semibold
+                                     hover:bg-blue-600 transition-colors">
+                              下單
+                            </button>
+                            <button @click="watchlist.remove(w.code)"
+                              class="text-slate-300 hover:text-red-400 transition-colors"
+                              title="移出自選">
+                              <X class="w-4 h-4" />
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     </tbody>
@@ -499,12 +564,15 @@ import {
   Wallet, PiggyBank, Search, X, ShoppingCart,
   RotateCcw, AlertTriangle, CheckCircle2, AlertCircle,
   Inbox, ClipboardList, Receipt, Landmark, CircleDollarSign,
+  Star,
 } from 'lucide-vue-next'
 import { usePortfolioStore } from '@/stores/portfolio'
+import { useWatchlistStore } from '@/stores/watchlist'
 import { searchStocks, findStock } from '@/data/twStocks'
 import { getQuote } from '@/services/twseApi'
 
-const portfolio = usePortfolioStore()
+const portfolio  = usePortfolioStore()
+const watchlist  = useWatchlistStore()
 
 // ── Setup ─────────────────────────────────────────────────
 const setupAmount  = ref(1000000)
