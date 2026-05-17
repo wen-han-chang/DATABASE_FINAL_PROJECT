@@ -164,14 +164,18 @@
                       <span class="text-xs text-brand-muted ml-2">{{ activeStock.code }}</span>
                     </div>
                     <div class="text-right">
-                      <p class="font-mono font-bold text-lg"
-                        :class="priceChange >= 0 ? 'text-stock-up' : 'text-stock-down'">
-                        {{ mockPrice.toFixed(2) }}
-                      </p>
-                      <p class="text-xs" :class="priceChange >= 0 ? 'text-stock-up' : 'text-stock-down'">
-                        {{ priceChange >= 0 ? '+' : '' }}{{ priceChange.toFixed(2) }}
-                        ({{ priceChangePct >= 0 ? '+' : '' }}{{ priceChangePct.toFixed(2) }}%)
-                      </p>
+                      <div v-if="quoteLoading" class="text-xs text-brand-muted animate-pulse">載入報價中…</div>
+                      <div v-else-if="quoteError" class="text-xs text-amber-500">{{ quoteError }}</div>
+                      <template v-else>
+                        <p class="font-mono font-bold text-lg"
+                          :class="priceChange >= 0 ? 'text-stock-up' : 'text-stock-down'">
+                          {{ livePrice.toFixed(2) }}
+                        </p>
+                        <p class="text-xs" :class="priceChange >= 0 ? 'text-stock-up' : 'text-stock-down'">
+                          {{ priceChange >= 0 ? '+' : '' }}{{ priceChange.toFixed(2) }}
+                          ({{ priceChangePct >= 0 ? '+' : '' }}{{ priceChangePct.toFixed(2) }}%)
+                        </p>
+                      </template>
                     </div>
                   </div>
 
@@ -192,6 +196,12 @@
                 class="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
                 <h3 class="text-sm font-bold text-brand-primary flex items-center gap-2">
                   <ShoppingCart class="w-4 h-4 text-blue-500" />下單
+                  <span class="ml-auto flex items-center gap-1 text-xs font-normal"
+                    :class="isMarketOpen ? 'text-green-500' : 'text-slate-400'">
+                    <span class="w-1.5 h-1.5 rounded-full inline-block"
+                      :class="isMarketOpen ? 'bg-green-500 animate-pulse' : 'bg-slate-400'"></span>
+                    {{ isMarketOpen ? '開盤中' : '休市' }}
+                  </span>
                 </h3>
 
                 <!-- Buy / Sell toggle -->
@@ -247,27 +257,35 @@
                   </p>
                 </div>
 
-                <!-- Price (read-only market price) -->
+                <!-- Price (real TWSE market price) -->
                 <div>
-                  <label class="text-xs font-semibold text-brand-primary block mb-1.5">市價（元/股）</label>
-                  <div class="py-2.5 px-3.5 rounded-lg bg-slate-50 border border-slate-200 text-sm font-mono font-bold text-brand-primary">
-                    {{ mockPrice.toFixed(2) }}
+                  <div class="flex items-center justify-between mb-1.5">
+                    <label class="text-xs font-semibold text-brand-primary">市價（元/股）</label>
+                    <button @click="fetchLivePrice(activeStock.code)" :disabled="quoteLoading"
+                      class="text-[11px] text-blue-500 hover:text-blue-700 disabled:opacity-40 transition-colors">
+                      {{ quoteLoading ? '更新中…' : '↻ 更新報價' }}
+                    </button>
+                  </div>
+                  <div class="py-2.5 px-3.5 rounded-lg bg-slate-50 border border-slate-200 text-sm font-mono font-bold"
+                    :class="quoteLoading ? 'text-slate-400 animate-pulse' : 'text-brand-primary'">
+                    {{ livePrice > 0 ? livePrice.toFixed(2) : '—' }}
+                    <span v-if="livePrice > 0" class="text-[10px] font-normal text-slate-400 ml-1">TWSE 即時</span>
                   </div>
                 </div>
 
                 <!-- Fee breakdown -->
                 <div class="bg-slate-50 rounded-xl p-3 space-y-1.5 text-xs">
                   <div class="flex justify-between text-brand-muted">
-                    <span v-if="tradeMode === 'lot'">面額 ({{ qty }}張 × 1000股 × {{ mockPrice.toFixed(2) }}元)</span>
-                    <span v-else>面額 ({{ qty }}股 × {{ mockPrice.toFixed(2) }}元)</span>
+                    <span v-if="tradeMode === 'lot'">面額 ({{ qty }}張 × 1000股 × {{ livePrice.toFixed(2) }}元)</span>
+                    <span v-else>面額 ({{ qty }}股 × {{ livePrice.toFixed(2) }}元)</span>
                     <span class="font-mono">{{ fmt(faceAmount) }}</span>
                   </div>
                   <div class="flex justify-between text-brand-muted">
-                    <span>手續費 (0.1425%)</span>
+                    <span>手續費 (0.1425%{{ isOddLot ? '，零股最低1元' : '，最低20元' }})</span>
                     <span class="font-mono">−{{ fmt(fee) }}</span>
                   </div>
                   <div v-if="orderType === 'sell'" class="flex justify-between text-brand-muted">
-                    <span>證交稅 ({{ isETF ? '0.1%' : '0.3%' }})</span>
+                    <span>證交稅 ({{ isETF ? '0.1% ETF' : isDayTrade ? '0.15% 當沖' : '0.3%' }})</span>
                     <span class="font-mono">−{{ fmt(tax) }}</span>
                   </div>
                   <div class="flex justify-between font-bold text-brand-primary pt-1 border-t border-slate-200">
@@ -483,7 +501,8 @@ import {
   Inbox, ClipboardList, Receipt, Landmark, CircleDollarSign,
 } from 'lucide-vue-next'
 import { usePortfolioStore } from '@/stores/portfolio'
-import { searchStocks, findStock, getMockPrice, getMockPrevPrice } from '@/data/twStocks'
+import { searchStocks, findStock } from '@/data/twStocks'
+import { getQuote } from '@/services/twseApi'
 
 const portfolio = usePortfolioStore()
 
@@ -518,11 +537,14 @@ async function doReset() {
   } catch (e) {
     showToast(false, `重置失敗：${e.message}`)
   }
-  confirmReset.value = false
-  activeStock.value  = null
-  query.value        = ''
-  qty.value          = 1
-  tradeMode.value    = 'lot'
+  confirmReset.value  = false
+  activeStock.value   = null
+  query.value         = ''
+  qty.value           = 1
+  tradeMode.value     = 'lot'
+  livePrice.value     = 0
+  livePrevClose.value = 0
+  quoteError.value    = ''
 }
 
 // ── Asset summary stats ────────────────────────────────────
@@ -565,7 +587,7 @@ const feeStats = computed(() => {
     {
       label:     '累計證交稅',
       value:     totalTaxPaid.value,
-      note:      '賣出時收取 0.3%（ETF 0.1%）',
+      note:      '賣出時收取 0.3%（ETF 0.1%，當沖 0.15%）',
       icon:      Landmark,
       iconBg:    'bg-orange-100',
       iconColor: 'text-orange-600',
@@ -609,8 +631,11 @@ function onSearchBlur() {
   setTimeout(() => { showDrop.value = false }, 150)
 }
 function clearSearch() {
-  query.value      = ''
-  activeStock.value = null
+  query.value         = ''
+  activeStock.value   = null
+  livePrice.value     = 0
+  livePrevClose.value = 0
+  quoteError.value    = ''
   searchInput.value?.focus()
 }
 function pickStock(stock) {
@@ -620,6 +645,9 @@ function pickStock(stock) {
   searchFocused.value = false
   orderType.value     = 'buy'
   qty.value           = 1
+  livePrice.value     = 0
+  livePrevClose.value = 0
+  fetchLivePrice(stock.code)
 }
 function quickSelect(code) {
   const stock = findStock(code)
@@ -627,21 +655,57 @@ function quickSelect(code) {
   activeTab.value = '持股明細'
 }
 
-// ── Price ──────────────────────────────────────────────────
-const mockPrice = computed(() =>
-  activeStock.value ? getMockPrice(activeStock.value) : 0
-)
-const prevPrice = computed(() =>
-  activeStock.value ? getMockPrevPrice(activeStock.value) : 0
-)
-const priceChange    = computed(() => mockPrice.value - prevPrice.value)
+// ── Price (real TWSE quote) ────────────────────────────────
+const livePrice     = ref(0)
+const livePrevClose = ref(0)
+const quoteLoading  = ref(false)
+const quoteError    = ref('')
+
+async function fetchLivePrice(code) {
+  quoteLoading.value = true
+  quoteError.value   = ''
+  try {
+    const res = await getQuote(code)
+    livePrice.value     = res.data?.price    ?? 0
+    livePrevClose.value = res.data?.prevClose ?? 0
+  } catch (e) {
+    quoteError.value = e.message || '報價取得失敗'
+  } finally {
+    quoteLoading.value = false
+  }
+}
+
+const priceChange    = computed(() => livePrice.value - livePrevClose.value)
 const priceChangePct = computed(() =>
-  prevPrice.value > 0 ? (priceChange.value / prevPrice.value) * 100 : 0
+  livePrevClose.value > 0 ? (priceChange.value / livePrevClose.value) * 100 : 0
 )
 
 const currentHolding = computed(() =>
   activeStock.value ? portfolio.getHolding(activeStock.value.code) : null
 )
+
+// ── Market status (Taiwan time UTC+8, TWSE hours 09:00-13:30 Mon-Fri) ────
+function getTaiwanTime() {
+  return new Date(Date.now() + 8 * 3600 * 1000)
+}
+
+const isMarketOpen = computed(() => {
+  const tw = getTaiwanTime()
+  const day = tw.getUTCDay()
+  if (day === 0 || day === 6) return false
+  const mins = tw.getUTCHours() * 60 + tw.getUTCMinutes()
+  return mins >= 9 * 60 && mins <= 13 * 60 + 30
+})
+
+const marketStatusMsg = computed(() => {
+  const tw = getTaiwanTime()
+  const day = tw.getUTCDay()
+  if (day === 0 || day === 6) return '今日為假日，台股休市'
+  const mins = tw.getUTCHours() * 60 + tw.getUTCMinutes()
+  if (mins < 9 * 60) return '尚未開盤（09:00 開盤）'
+  if (mins > 13 * 60 + 30) return '今日已收盤（13:30 收盤）'
+  return ''
+})
 
 // ── Order form ─────────────────────────────────────────────
 const orderType  = ref('buy')
@@ -670,10 +734,23 @@ const isETF = computed(() =>
     : false
 )
 
-const faceAmount = computed(() => actualShares.value * mockPrice.value)
-const fee        = computed(() => portfolio.calcFee(faceAmount.value))
+// 當沖偵測：賣出且今天已有同股買入紀錄
+const isDayTrade = computed(() => {
+  if (!activeStock.value || orderType.value !== 'sell') return false
+  const today = new Date().toISOString().slice(0, 10)
+  return portfolio.orders.some(
+    (o) => o.type === 'buy' && o.code === activeStock.value.code &&
+           o.timestamp && String(o.timestamp).slice(0, 10) === today,
+  )
+})
+
+const isOddLot   = computed(() => tradeMode.value === 'share')
+const faceAmount = computed(() => actualShares.value * livePrice.value)
+const fee        = computed(() => portfolio.calcFee(faceAmount.value, isOddLot.value))
 const tax        = computed(() =>
-  orderType.value === 'sell' ? portfolio.calcTax(faceAmount.value, activeStock.value?.code ?? '') : 0
+  orderType.value === 'sell'
+    ? portfolio.calcTax(faceAmount.value, activeStock.value?.code ?? '', isDayTrade.value)
+    : 0
 )
 const totalAmount = computed(() =>
   orderType.value === 'buy'
@@ -683,9 +760,7 @@ const totalAmount = computed(() =>
 
 const validationMsg = computed(() => {
   if (!activeStock.value || qty.value < 1) return ''
-  if (tradeMode.value === 'share') {
-    return '目前後端資料表以「張」為交易單位，暫不支援零股下單'
-  }
+  if (!isMarketOpen.value) return marketStatusMsg.value
   if (orderType.value === 'buy' && portfolio.cash < totalAmount.value) {
     return `現金不足，需 ${fmt(totalAmount.value)} 元（可用 ${fmt(portfolio.cash)} 元）`
   }
@@ -700,15 +775,15 @@ const validationMsg = computed(() => {
 })
 
 const canOrder = computed(() =>
-  activeStock.value && qty.value >= 1 && !validationMsg.value
+  activeStock.value && qty.value >= 1 && livePrice.value > 0 && !quoteLoading.value && !validationMsg.value
 )
 
 // ── Place order ────────────────────────────────────────────
 async function placeOrder() {
   if (!canOrder.value) return
-  const result = orderType.value === 'buy'
-    ? portfolio.buy(activeStock.value, actualShares.value, mockPrice.value)
-    : portfolio.sell(activeStock.value, actualShares.value, mockPrice.value)
+  const result = await (orderType.value === 'buy'
+    ? portfolio.buy(activeStock.value, actualShares.value, livePrice.value)
+    : portfolio.sell(activeStock.value, actualShares.value, livePrice.value))
   showToast(result.ok, result.msg)
   if (result.ok) qty.value = 1
 }
