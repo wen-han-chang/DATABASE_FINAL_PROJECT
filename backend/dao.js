@@ -19,7 +19,11 @@
 
 import { query, withTransaction, sql } from './db.js'
 import { hashPassword, verifyPassword, signToken } from './auth.js'
-import { fetchRecentHistory, fetchQuote } from './twseExtra.js'
+import {
+  fetchRecentHistoryWithFallback,
+  fetchHistoryBeforeWithFallback,
+  fetchQuote,
+} from './twseExtra.js'
 
 /**
  * 建一個帶 HTTP 狀態碼的錯誤，讓 server.js 能回對應狀態。
@@ -32,10 +36,13 @@ function httpError(statusCode, message) {
 
 const FULL_HISTORY_MONTHS = 13
 const QUICK_HISTORY_MONTHS = 2
-const QUICK_BAR_LIMIT = 24
+const OLDER_HISTORY_BATCH_MONTHS = 12
+const QUICK_BAR_LIMIT = 60
 const QUICK_HISTORY_CACHE_TTL_MS = 60000
 const fullHistoryJobs = new Set()
 const quickHistoryCache = new Map()
+const historyErrorCache = new Map()
+const REAL_HISTORY_SOURCES = new Set(['twse', 'finmind'])
 
 // 手續費 0.1425%；整張最低 20 元，零股最低 1 元
 function calcFee(faceAmount, isOddLot = false) {
@@ -114,12 +121,16 @@ async function readStockSync(stockId) {
   return syncRows[0] ?? null
 }
 
-function isFreshFullSync(sync) {
-  const todayStr = new Date().toISOString().slice(0, 10)
-  return sync?.source === 'twse' && toDateText(sync.synced_date) === todayStr
+function isRealHistorySource(source) {
+  return REAL_HISTORY_SOURCES.has(source)
 }
 
-async function replaceBarsWithTwseHistory(stockId, bars) {
+function isFreshFullSync(sync) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  return isRealHistorySource(sync?.source) && toDateText(sync.synced_date) === todayStr
+}
+
+async function replaceBarsWithHistory(stockId, bars, source) {
   if (!bars.length) return 0
 
   await withTransaction(async (tx) => {
@@ -146,25 +157,28 @@ async function replaceBarsWithTwseHistory(stockId, bars) {
     // source = twse 代表這檔已完成完整歷史同步，不是 seed 備援資料。
     await new sql.Request(tx)
       .input('sid', sql.SmallInt, stockId)
+      .input('source', sql.NVarChar(20), source)
       .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
                  UPDATE dbo.stock_sync
-                    SET source = N'twse', last_synced = SYSDATETIME()
+                    SET source = @source, last_synced = SYSDATETIME()
                   WHERE stock_id = @sid;
                ELSE
                  INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
-                 VALUES (@sid, N'twse', SYSDATETIME());`)
+                 VALUES (@sid, @source, SYSDATETIME());`)
   })
 
   return bars.length
 }
 
 async function syncFullHistory(cleanCode, stockId) {
-  const realBars = await fetchRecentHistory(cleanCode, FULL_HISTORY_MONTHS)
-  if (!realBars.length) return 0
-  return replaceBarsWithTwseHistory(stockId, realBars)
+  const { bars, provider } = await fetchRecentHistoryWithFallback(cleanCode, FULL_HISTORY_MONTHS)
+  if (!bars.length || !isRealHistorySource(provider)) {
+    throw new Error(`No historical bars were returned for ${cleanCode}.`)
+  }
+  return replaceBarsWithHistory(stockId, bars, provider)
 }
 
-async function upsertRecentBars(stockId, bars) {
+async function upsertRecentBars(stockId, bars, source) {
   if (!bars.length) return 0
 
   await withTransaction(async (tx) => {
@@ -193,21 +207,30 @@ async function upsertRecentBars(stockId, bars) {
 
     await new sql.Request(tx)
       .input('sid', sql.SmallInt, stockId)
+      .input('source', sql.NVarChar(20), source)
       .query(`IF EXISTS (SELECT 1 FROM dbo.stock_sync WHERE stock_id = @sid)
                  UPDATE dbo.stock_sync
-                    SET source = N'twse', last_synced = SYSDATETIME()
+                    SET source = @source, last_synced = SYSDATETIME()
                   WHERE stock_id = @sid;
                ELSE
                  INSERT INTO dbo.stock_sync (stock_id, source, last_synced)
-                 VALUES (@sid, N'twse', SYSDATETIME());`)
+                 VALUES (@sid, @source, SYSDATETIME());`)
   })
 
   return bars.length
 }
 
 async function syncRecentHistory(cleanCode, stockId) {
-  const recentBars = await fetchRecentHistory(cleanCode, QUICK_HISTORY_MONTHS)
-  return upsertRecentBars(stockId, recentBars)
+  const { bars, provider } = await fetchRecentHistoryWithFallback(cleanCode, QUICK_HISTORY_MONTHS)
+  if (!bars.length || !isRealHistorySource(provider)) return 0
+  return upsertRecentBars(stockId, bars, provider)
+}
+
+async function syncOlderHistory(cleanCode, stockId, beforeDate, months = OLDER_HISTORY_BATCH_MONTHS) {
+  const { bars, provider } = await fetchHistoryBeforeWithFallback(cleanCode, beforeDate, months)
+  if (!bars.length || !isRealHistorySource(provider)) return { bars: [], provider }
+  await upsertRecentBars(stockId, bars, provider)
+  return { bars, provider }
 }
 
 /**
@@ -218,11 +241,12 @@ async function syncRecentHistory(cleanCode, stockId) {
  * 2. quick=true 時若資料庫已有 TWSE 歷史，直接回資料庫資料，不顯示載入。
  * 3. quick=true 且資料庫還沒有 TWSE 歷史，才抓最近約 2 個月快速回圖。
  * 4. 非 quick 背景請求：已有舊 TWSE 歷史時只補最近 2 個月；完全沒有 TWSE 歷史才補完整 13 個月。
+ * 5. 若帶 before=YYYY-MM-DD，代表前端已滑到最左側；後端只補 before 以前更早的 12 個月。
  *
- * 這樣可以避免第一次點股票時卡在 13 個月歷史資料下載。
+ * 這樣可以避免第一次點股票時卡在多年歷史資料下載，也能讓使用者按需往前看。
  *
  * @param {string} code
- * @param {{ refresh?: boolean, quick?: boolean }} opts
+ * @param {{ refresh?: boolean, quick?: boolean, before?: string, months?: number }} opts
  * @returns {Promise<{bars:Array, source:string, historyStatus:string}>}
  */
 export async function getStockBars(code, opts = {}) {
@@ -235,6 +259,23 @@ export async function getStockBars(code, opts = {}) {
     return { bars: [], source: 'not_found', historyStatus: 'not_found' }
   }
 
+  if (opts.before) {
+    const months = Number(opts.months || OLDER_HISTORY_BATCH_MONTHS)
+    const safeMonths = Number.isFinite(months) && months > 0
+      ? Math.min(Math.floor(months), OLDER_HISTORY_BATCH_MONTHS)
+      : OLDER_HISTORY_BATCH_MONTHS
+    const olderHistory = await syncOlderHistory(cleanCode, stockId, opts.before, safeMonths)
+
+    return {
+      bars: olderHistory.bars,
+      source: olderHistory.bars.length
+        ? `${olderHistory.provider}.stock_day.older`
+        : `${olderHistory.provider || 'history'}.stock_day.older.empty`,
+      historyStatus: 'complete',
+      hasMoreBefore: olderHistory.bars.length > 0,
+    }
+  }
+
   // 2) 是否需要同步
   const sync = await readStockSync(stockId)
   const hasFreshFullHistory = !opts.refresh && isFreshFullSync(sync)
@@ -243,10 +284,12 @@ export async function getStockBars(code, opts = {}) {
     const existingBars = await readBarsFromDb(cleanCode)
 
     // 資料庫已經有 TWSE 歷史時，先完整顯示既有資料；缺的近期資料交給背景請求補。
-    if (sync?.source === 'twse' && existingBars.length) {
+    if (isRealHistorySource(sync?.source) && existingBars.length) {
       return {
         bars: existingBars,
-        source: hasFreshFullHistory ? 'ncu_db.stock_daily_bars' : 'ncu_db.stock_daily_bars.stale',
+        source: hasFreshFullHistory
+          ? `ncu_db.stock_daily_bars.${sync.source}`
+          : `ncu_db.stock_daily_bars.${sync.source}.stale`,
         historyStatus: 'complete',
       }
     }
@@ -255,7 +298,7 @@ export async function getStockBars(code, opts = {}) {
     if (cachedQuick && Date.now() - cachedQuick.ts < QUICK_HISTORY_CACHE_TTL_MS) {
       return {
         bars: cachedQuick.bars,
-        source: 'twse.stock_day.quick.cache',
+        source: `${cachedQuick.source}.cache`,
         historyStatus: 'partial_loading',
       }
     }
@@ -263,23 +306,30 @@ export async function getStockBars(code, opts = {}) {
     // 第一次看這檔時，直接向 TWSE 抓短期真實資料，不再用測試資料墊圖。
     let quickBars = []
     try {
-      quickBars = (await fetchRecentHistory(cleanCode, QUICK_HISTORY_MONTHS)).slice(-QUICK_BAR_LIMIT)
+      const quickHistory = await fetchRecentHistoryWithFallback(cleanCode, QUICK_HISTORY_MONTHS)
+      quickBars = quickHistory.bars.slice(-QUICK_BAR_LIMIT)
+      if (quickBars.length) {
+        quickHistoryCache.set(cleanCode, {
+          bars: quickBars,
+          source: `${quickHistory.provider}.stock_day.quick`,
+          ts: Date.now(),
+        })
+      }
     } catch {
       quickBars = []
-    }
-    if (quickBars.length) {
-      quickHistoryCache.set(cleanCode, { bars: quickBars, ts: Date.now() })
     }
 
     return {
       bars: quickBars,
-      source: quickBars.length ? 'twse.stock_day.quick' : 'twse.stock_day.loading',
+      source: quickBars.length
+        ? quickHistoryCache.get(cleanCode)?.source || 'history.stock_day.quick'
+        : 'history.stock_day.loading',
       historyStatus: quickBars.length ? 'partial_loading' : 'loading',
     }
   }
 
   const existingBars = await readBarsFromDb(cleanCode)
-  const shouldFullSync = opts.refresh === true || sync?.source !== 'twse' || !existingBars.length
+  const shouldFullSync = opts.refresh === true || !isRealHistorySource(sync?.source) || !existingBars.length
   const needSync = opts.refresh === true || !hasFreshFullHistory
   if (needSync) {
     if (!fullHistoryJobs.has(cleanCode)) {
@@ -290,7 +340,9 @@ export async function getStockBars(code, opts = {}) {
         } else {
           await syncRecentHistory(cleanCode, stockId)
         }
-      } catch {
+        historyErrorCache.delete(cleanCode)
+      } catch (error) {
+        historyErrorCache.set(cleanCode, error instanceof Error ? error.message : String(error))
         // 抓失敗不動資料庫，回傳現有資料；前端會顯示資料仍在載入。
       } finally {
         fullHistoryJobs.delete(cleanCode)
@@ -299,18 +351,19 @@ export async function getStockBars(code, opts = {}) {
   }
 
   const latestSync = await readStockSync(stockId)
-  if (latestSync?.source !== 'twse') {
+  if (!isRealHistorySource(latestSync?.source)) {
     return {
       bars: [],
-      source: 'twse.stock_day.loading',
+      source: 'history.stock_day.loading',
       historyStatus: 'loading',
+      error: historyErrorCache.get(cleanCode) || null,
     }
   }
 
   return {
     bars: await readBarsFromDb(cleanCode),
-    source: 'ncu_db.stock_daily_bars',
-    historyStatus: latestSync?.source === 'twse' ? 'complete' : 'loading',
+    source: `ncu_db.stock_daily_bars.${latestSync.source}`,
+    historyStatus: 'complete',
   }
 }
 

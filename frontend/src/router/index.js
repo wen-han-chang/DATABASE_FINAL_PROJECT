@@ -19,6 +19,10 @@ const routes = [
     path: '/trading',
     component: () => import('@/views/TradingView.vue'),
   },
+  {
+    path: '/assistant',
+    component: () => import('@/views/AssistantView.vue'),
+  },
 ]
 
 const router = createRouter({

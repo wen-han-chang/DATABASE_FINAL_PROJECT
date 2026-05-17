@@ -95,3 +95,11 @@ export function buyApi({ code, shares, price }) {
 export function sellApi({ code, shares, price }) {
   return request('/api/orders/sell', { method: 'POST', auth: true, body: { code, shares, price } })
 }
+
+export function chatAssistantApi(message) {
+  return request('/api/assistant/chat', {
+    method: 'POST',
+    auth: true,
+    body: { message },
+  })
+}
