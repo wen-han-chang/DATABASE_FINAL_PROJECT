@@ -30,7 +30,6 @@ function httpError(statusCode, message) {
   return err
 }
 
-const LOT_SHARES = 1000 // 1 張 = 1000 股
 const FULL_HISTORY_MONTHS = 13
 const QUICK_HISTORY_MONTHS = 2
 const QUICK_BAR_LIMIT = 24
@@ -38,14 +37,15 @@ const QUICK_HISTORY_CACHE_TTL_MS = 60000
 const fullHistoryJobs = new Set()
 const quickHistoryCache = new Map()
 
-function calcFee(faceAmount) {
-  // 手續費 0.1425%，最低 20 元，取兩位小數
-  return Math.max(20, +(faceAmount * 0.001425).toFixed(2))
+// 手續費 0.1425%；整張最低 20 元，零股最低 1 元
+function calcFee(faceAmount, isOddLot = false) {
+  return Math.max(isOddLot ? 1 : 20, +(faceAmount * 0.001425).toFixed(2))
 }
 
-function calcTax(faceAmount, isEtf) {
-  // 證交稅：ETF 0.1%，一般股 0.3%
-  return +(faceAmount * (isEtf ? 0.001 : 0.003)).toFixed(2)
+// 證交稅：ETF 0.1%；當沖一般股 0.15%；一般股 0.3%
+function calcTax(faceAmount, isEtf, isDayTrade = false) {
+  if (isEtf) return +(faceAmount * 0.001).toFixed(2)
+  return +(faceAmount * (isDayTrade ? 0.0015 : 0.003)).toFixed(2)
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -553,39 +553,56 @@ async function loadPortfolioAndStock(tx, userId, code) {
   return { portfolio: pRes.recordset[0], stock: sRes.recordset[0] }
 }
 
+// 台灣時間 UTC+8，交易日週一~五，交易時間 09:00-13:30
+function checkTradingTime() {
+  const twMs = Date.now() + 8 * 3600 * 1000
+  const tw = new Date(twMs)
+  const day = tw.getUTCDay() // 0=Sun, 6=Sat
+  if (day === 0 || day === 6) throw httpError(400, '非交易日（週末休市）')
+  const mins = tw.getUTCHours() * 60 + tw.getUTCMinutes()
+  if (mins < 9 * 60 || mins > 13 * 60 + 30) {
+    throw httpError(400, '非交易時間（台股交易時間：週一至週五 09:00－13:30）')
+  }
+}
+
 /**
  * 買入。交易內：檢查現金 → 寫 orders → upsert holdings → 扣 portfolios.cash。
+ * shares：實際股數（整張 = n×1000，零股 < 1000）。
  */
-export async function buyStock(userId, code, lots, price) {
-  const nLots = Number(lots)
+export async function buyStock(userId, code, shares, price) {
+  checkTradingTime()
+  const nShares = Number(shares)
   const nPrice = Number(price)
-  if (!(nLots > 0) || !(nPrice > 0)) throw httpError(400, '張數與價格需大於 0')
+  if (!Number.isInteger(nShares) || nShares <= 0) throw httpError(400, '股數必須是正整數')
+  if (!(nPrice > 0)) throw httpError(400, '價格需大於 0')
+
+  const isOddLot = nShares < 1000
 
   return withTransaction(async (tx) => {
     const { portfolio, stock } = await loadPortfolioAndStock(tx, userId, code)
 
-    const faceAmount = nLots * LOT_SHARES * nPrice
-    const fee = calcFee(faceAmount)
+    const faceAmount = nShares * nPrice
+    const fee = calcFee(faceAmount, isOddLot)
     const totalCost = +(faceAmount + fee).toFixed(2)
 
     if (Number(portfolio.cash) < totalCost) {
       throw httpError(400, `現金不足，需 ${Math.round(totalCost)} 元，可用 ${Math.round(portfolio.cash)} 元`)
     }
 
-    // 1) 寫委託紀錄
+    // 1) 寫委託紀錄（lots 欄位存實際股數）
     await new sql.Request(tx)
       .input('pid', sql.BigInt, portfolio.id)
       .input('sid', sql.SmallInt, stock.id)
-      .input('lots', sql.Int, nLots)
+      .input('shares', sql.Int, nShares)
       .input('price', sql.Decimal(10, 4), nPrice)
       .input('face', sql.Decimal(15, 2), faceAmount)
       .input('fee', sql.Decimal(10, 2), fee)
       .input('total', sql.Decimal(15, 2), totalCost)
       .query(`INSERT INTO dbo.orders
                 (portfolio_id, stock_id, order_type, lots, price, face_amount, fee, tax, total_amount)
-              VALUES (@pid, @sid, 'buy', @lots, @price, @face, @fee, 0, @total)`)
+              VALUES (@pid, @sid, 'buy', @shares, @price, @face, @fee, 0, @total)`)
 
-    // 2) upsert 持股（已持有→重算平均成本；否則新增）
+    // 2) upsert 持股（lots 欄位存實際股數，重算加權平均成本）
     const hRes = await new sql.Request(tx)
       .input('pid', sql.BigInt, portfolio.id)
       .input('sid', sql.SmallInt, stock.id)
@@ -593,21 +610,21 @@ export async function buyStock(userId, code, lots, price) {
 
     if (hRes.recordset.length > 0) {
       const h = hRes.recordset[0]
-      const newLots = h.lots + nLots
-      const newAvg = +(((h.lots * Number(h.avg_cost)) + (nLots * nPrice)) / newLots).toFixed(4)
+      const newShares = h.lots + nShares
+      const newAvg = +(((h.lots * Number(h.avg_cost)) + (nShares * nPrice)) / newShares).toFixed(4)
       await new sql.Request(tx)
         .input('id', sql.BigInt, h.id)
-        .input('lots', sql.Int, newLots)
+        .input('shares', sql.Int, newShares)
         .input('avg', sql.Decimal(10, 4), newAvg)
-        .query('UPDATE dbo.holdings SET lots = @lots, avg_cost = @avg WHERE id = @id')
+        .query('UPDATE dbo.holdings SET lots = @shares, avg_cost = @avg WHERE id = @id')
     } else {
       await new sql.Request(tx)
         .input('pid', sql.BigInt, portfolio.id)
         .input('sid', sql.SmallInt, stock.id)
-        .input('lots', sql.Int, nLots)
+        .input('shares', sql.Int, nShares)
         .input('avg', sql.Decimal(10, 4), nPrice)
         .query(`INSERT INTO dbo.holdings (portfolio_id, stock_id, lots, avg_cost)
-                VALUES (@pid, @sid, @lots, @avg)`)
+                VALUES (@pid, @sid, @shares, @avg)`)
     }
 
     // 3) 扣現金
@@ -616,20 +633,28 @@ export async function buyStock(userId, code, lots, price) {
       .input('cost', sql.Decimal(15, 2), totalCost)
       .query('UPDATE dbo.portfolios SET cash = cash - @cost WHERE id = @pid')
 
+    const displayQty = nShares >= 1000
+      ? `${nShares / 1000} 張`
+      : `${nShares} 股（零股）`
     return {
       ok: true,
-      msg: `買入 ${stock.name} ${nLots} 張，扣款 ${Math.round(totalCost)} 元（含手續費 ${Math.round(fee)} 元）`,
+      msg: `買入 ${stock.name} ${displayQty}，扣款 ${Math.round(totalCost)} 元（手續費 ${Math.round(fee)} 元）`,
     }
   })
 }
 
 /**
- * 賣出。交易內：檢查持股 → 寫 orders → 減/刪 holdings → 加 portfolios.cash。
+ * 賣出。交易內：檢查持股 → 偵測當沖 → 寫 orders → 減/刪 holdings → 加 portfolios.cash。
+ * shares：實際股數；當沖（當日已買同股）→ 證交稅 0.15%。
  */
-export async function sellStock(userId, code, lots, price) {
-  const nLots = Number(lots)
+export async function sellStock(userId, code, shares, price) {
+  const nShares = Number(shares)
   const nPrice = Number(price)
-  if (!(nLots > 0) || !(nPrice > 0)) throw httpError(400, '張數與價格需大於 0')
+  if (!Number.isInteger(nShares) || nShares <= 0) throw httpError(400, '股數必須是正整數')
+  if (!(nPrice > 0)) throw httpError(400, '價格需大於 0')
+
+  checkTradingTime()
+  const isOddLot = nShares < 1000
 
   return withTransaction(async (tx) => {
     const { portfolio, stock } = await loadPortfolioAndStock(tx, userId, code)
@@ -640,20 +665,30 @@ export async function sellStock(userId, code, lots, price) {
       .query('SELECT id, lots FROM dbo.holdings WHERE portfolio_id = @pid AND stock_id = @sid')
 
     const holding = hRes.recordset[0]
-    if (!holding || holding.lots < nLots) {
-      throw httpError(400, `持股不足，目前持有 ${holding ? holding.lots : 0} 張`)
+    if (!holding || holding.lots < nShares) {
+      throw httpError(400, `持股不足，目前持有 ${holding ? holding.lots : 0} 股`)
     }
 
-    const faceAmount = nLots * LOT_SHARES * nPrice
-    const fee = calcFee(faceAmount)
-    const tax = calcTax(faceAmount, !!stock.is_etf)
+    // 偵測當沖：今天已有買入同一檔 → 適用 0.15% 證交稅
+    const dtRes = await new sql.Request(tx)
+      .input('pid', sql.BigInt, portfolio.id)
+      .input('sid', sql.SmallInt, stock.id)
+      .query(`SELECT COUNT(*) AS cnt FROM dbo.orders
+              WHERE portfolio_id = @pid AND stock_id = @sid
+                AND order_type = 'buy'
+                AND CAST(executed_at AS DATE) = CAST(GETDATE() AS DATE)`)
+    const isDayTrade = dtRes.recordset[0].cnt > 0
+
+    const faceAmount = nShares * nPrice
+    const fee = calcFee(faceAmount, isOddLot)
+    const tax = calcTax(faceAmount, !!stock.is_etf, isDayTrade)
     const received = +(faceAmount - fee - tax).toFixed(2)
 
-    // 1) 寫委託紀錄
+    // 1) 寫委託紀錄（lots 欄位存實際股數）
     await new sql.Request(tx)
       .input('pid', sql.BigInt, portfolio.id)
       .input('sid', sql.SmallInt, stock.id)
-      .input('lots', sql.Int, nLots)
+      .input('shares', sql.Int, nShares)
       .input('price', sql.Decimal(10, 4), nPrice)
       .input('face', sql.Decimal(15, 2), faceAmount)
       .input('fee', sql.Decimal(10, 2), fee)
@@ -661,18 +696,18 @@ export async function sellStock(userId, code, lots, price) {
       .input('total', sql.Decimal(15, 2), received)
       .query(`INSERT INTO dbo.orders
                 (portfolio_id, stock_id, order_type, lots, price, face_amount, fee, tax, total_amount)
-              VALUES (@pid, @sid, 'sell', @lots, @price, @face, @fee, @tax, @total)`)
+              VALUES (@pid, @sid, 'sell', @shares, @price, @face, @fee, @tax, @total)`)
 
     // 2) 減持股；賣光就刪除整列
-    if (holding.lots === nLots) {
+    if (holding.lots === nShares) {
       await new sql.Request(tx)
         .input('id', sql.BigInt, holding.id)
         .query('DELETE FROM dbo.holdings WHERE id = @id')
     } else {
       await new sql.Request(tx)
         .input('id', sql.BigInt, holding.id)
-        .input('lots', sql.Int, holding.lots - nLots)
-        .query('UPDATE dbo.holdings SET lots = @lots WHERE id = @id')
+        .input('shares', sql.Int, holding.lots - nShares)
+        .query('UPDATE dbo.holdings SET lots = @shares WHERE id = @id')
     }
 
     // 3) 加現金
@@ -681,9 +716,13 @@ export async function sellStock(userId, code, lots, price) {
       .input('recv', sql.Decimal(15, 2), received)
       .query('UPDATE dbo.portfolios SET cash = cash + @recv WHERE id = @pid')
 
+    const displayQty = nShares >= 1000
+      ? `${nShares / 1000} 張`
+      : `${nShares} 股（零股）`
+    const dayTradeNote = isDayTrade ? '，當沖稅率 0.15%' : ''
     return {
       ok: true,
-      msg: `賣出 ${stock.name} ${nLots} 張，到帳 ${Math.round(received)} 元（手續費 ${Math.round(fee)} 元，證交稅 ${Math.round(tax)} 元）`,
+      msg: `賣出 ${stock.name} ${displayQty}，到帳 ${Math.round(received)} 元（手續費 ${Math.round(fee)} 元，證交稅 ${Math.round(tax)} 元${dayTradeNote}）`,
     }
   })
 }

@@ -251,7 +251,7 @@ const server = http.createServer(async (req, res) => {
         // 買入（含資料庫交易）
         if (path === '/api/orders/buy' && req.method === 'POST') {
           const body = await readJsonBody(req)
-          const result = await buyStock(userId, body.code, body.lots, body.price)
+          const result = await buyStock(userId, body.code, body.shares, body.price)
           sendJson(res, 200, result)
           return
         }
@@ -259,7 +259,7 @@ const server = http.createServer(async (req, res) => {
         // 賣出（含資料庫交易）
         if (path === '/api/orders/sell' && req.method === 'POST') {
           const body = await readJsonBody(req)
-          const result = await sellStock(userId, body.code, body.lots, body.price)
+          const result = await sellStock(userId, body.code, body.shares, body.price)
           sendJson(res, 200, result)
           return
         }

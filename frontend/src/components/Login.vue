@@ -138,10 +138,11 @@ const email        = ref('')
 const password     = ref('')
 const showPassword = ref(false)
 
-function quickFill() {
-  email.value    = 'demo@invest.ai'
-  password.value = 'demo123'
+async function quickFill() {
+  email.value     = 'demo@invest.ai'
+  password.value  = 'demo123'
   authStore.error = ''
+  await handleSubmit()
 }
 
 async function handleSubmit() {

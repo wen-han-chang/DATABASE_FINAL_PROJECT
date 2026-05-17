@@ -89,9 +89,9 @@ export function setupPortfolioApi(capital) {
 export function resetPortfolioApi() {
   return request('/api/portfolio/reset', { method: 'POST', auth: true })
 }
-export function buyApi({ code, lots, price }) {
-  return request('/api/orders/buy', { method: 'POST', auth: true, body: { code, lots, price } })
+export function buyApi({ code, shares, price }) {
+  return request('/api/orders/buy', { method: 'POST', auth: true, body: { code, shares, price } })
 }
-export function sellApi({ code, lots, price }) {
-  return request('/api/orders/sell', { method: 'POST', auth: true, body: { code, lots, price } })
+export function sellApi({ code, shares, price }) {
+  return request('/api/orders/sell', { method: 'POST', auth: true, body: { code, shares, price } })
 }
