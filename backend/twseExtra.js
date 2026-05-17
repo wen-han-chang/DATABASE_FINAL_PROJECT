@@ -13,6 +13,7 @@
 
 const STOCK_DAY_URL = 'https://www.twse.com.tw/exchangeReport/STOCK_DAY'
 const MIS_URL = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp'
+const FINMIND_URL = 'https://api.finmindtrade.com/api/v4/data'
 const UA = 'Mozilla/5.0 (database-final-project)'
 
 // 共用：把 "1,234.00" 這種字串轉成數字；轉不出來回 null
@@ -97,6 +98,124 @@ export async function fetchRecentHistory(stockNo, months = 13) {
   }
 
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
+}
+
+function toIsoDay(date) {
+  return date.toISOString().slice(0, 10)
+}
+
+function monthsAgo(months) {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth() - months, now.getDate())
+}
+
+async function fetchFinMindHistoryRange(stockNo, startDate, endDate) {
+  const url = new URL(FINMIND_URL)
+  url.searchParams.set('dataset', 'TaiwanStockPrice')
+  url.searchParams.set('data_id', stockNo)
+  url.searchParams.set('start_date', startDate)
+  url.searchParams.set('end_date', endDate)
+  if (process.env.FINMIND_TOKEN) {
+    url.searchParams.set('token', process.env.FINMIND_TOKEN)
+  }
+
+  const res = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': UA,
+    },
+    signal: AbortSignal.timeout(20000),
+  })
+  if (!res.ok) throw new Error(`FinMind HTTP ${res.status}`)
+
+  const json = await res.json()
+  if (!json || Number(json.status) !== 200 || !Array.isArray(json.data)) {
+    throw new Error(`FinMind invalid response for ${stockNo}`)
+  }
+
+  return json.data
+    .map((row) => ({
+      date: String(row.date || '').trim(),
+      open: toNum(row.open),
+      high: toNum(row.max),
+      low: toNum(row.min),
+      close: toNum(row.close),
+      volume: toNum(row.Trading_Volume) ?? 0,
+    }))
+    .filter((bar) => (
+      /^\d{4}-\d{2}-\d{2}$/.test(bar.date)
+      && bar.open != null
+      && bar.high != null
+      && bar.low != null
+      && bar.close != null
+    ))
+}
+
+export async function fetchRecentHistoryWithFallback(stockNo, months = 13) {
+  const twseBars = await fetchRecentHistory(stockNo, months)
+  if (twseBars.length) {
+    return { bars: twseBars, provider: 'twse' }
+  }
+
+  const startDate = toIsoDay(monthsAgo(months))
+  const endDate = toIsoDay(new Date())
+  const finMindBars = await fetchFinMindHistoryRange(stockNo, startDate, endDate)
+  return { bars: finMindBars, provider: finMindBars.length ? 'finmind' : 'finmind.empty' }
+}
+
+/**
+ * 以 beforeDate 為界，往更早的月份補抓歷史日線。
+ * 例如 beforeDate=2025-05-02、months=12，會抓 2024-05 ~ 2025-04。
+ *
+ * @param {string} stockNo
+ * @param {string} beforeDate YYYY-MM-DD
+ * @param {number} months
+ * @returns {Promise<Array<{date,open,high,low,close,volume}>>}
+ */
+export async function fetchHistoryBefore(stockNo, beforeDate, months = 12) {
+  const match = String(beforeDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) throw new Error('beforeDate must use YYYY-MM-DD format.')
+
+  const anchorYear = Number(match[1])
+  const anchorMonth = Number(match[2])
+  const byDate = new Map()
+
+  for (let i = 1; i <= months; i++) {
+    // anchorMonth 是 1-based；Date 的月份是 0-based。
+    const d = new Date(anchorYear, anchorMonth - 1 - i, 1)
+    let monthBars = []
+    try {
+      monthBars = await fetchStockDayMonth(stockNo, d.getFullYear(), d.getMonth() + 1)
+    } catch {
+      monthBars = []
+    }
+    for (const b of monthBars) byDate.set(b.date, b)
+    if (i < months) await new Promise((r) => setTimeout(r, 250))
+  }
+
+  return [...byDate.values()]
+    .filter((b) => b.date < beforeDate)
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+export async function fetchHistoryBeforeWithFallback(stockNo, beforeDate, months = 12) {
+  const twseBars = await fetchHistoryBefore(stockNo, beforeDate, months)
+  if (twseBars.length) {
+    return { bars: twseBars, provider: 'twse' }
+  }
+
+  const match = String(beforeDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) throw new Error('beforeDate must use YYYY-MM-DD format.')
+
+  const anchorYear = Number(match[1])
+  const anchorMonth = Number(match[2])
+  const start = new Date(anchorYear, anchorMonth - 1 - months, 1)
+  const end = new Date(anchorYear, anchorMonth - 1, 0)
+  const finMindBars = await fetchFinMindHistoryRange(stockNo, toIsoDay(start), toIsoDay(end))
+  return {
+    bars: finMindBars.filter((bar) => bar.date < beforeDate),
+    provider: finMindBars.length ? 'finmind' : 'finmind.empty',
+  }
 }
 
 /**

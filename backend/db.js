@@ -98,8 +98,8 @@ export async function getPool() {
  * 連線後自動補建程式需要、但 schema.sql 不一定有的小表。
  * 目的：使用者不必再去 SSMS 多跑一段，降低環境建置成本。
  *
- * stock_sync：記錄每檔股票的歷史資料「上次從 TWSE 同步的時間與來源」，
- * 讓後端判斷「要不要重新去官方抓真實歷史」。這也是一張典型的
+ * stock_sync：記錄每檔股票的歷史資料「上次同步的時間與來源」，
+ * 讓後端判斷「要不要重新抓真實歷史」。這也是一張典型的
  * ETL/同步中繼表，可清楚呈現資料同步狀態。
  */
 async function ensureSchema(pool) {
@@ -113,6 +113,79 @@ async function ensureSchema(pool) {
         CONSTRAINT pk_stock_sync   PRIMARY KEY (stock_id),
         CONSTRAINT fk_stock_sync_s FOREIGN KEY (stock_id)
                                    REFERENCES dbo.stocks(id) ON DELETE CASCADE
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_etf_holdings', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_etf_holdings (
+        id          BIGINT         IDENTITY(1,1) NOT NULL,
+        etf_code    VARCHAR(10)    NOT NULL,
+        trade_date  DATE           NOT NULL,
+        stock_code  VARCHAR(10)    NOT NULL,
+        stock_name  NVARCHAR(100)  NOT NULL,
+        quantity    BIGINT         NULL,
+        weight      DECIMAL(8,4)   NULL,
+        source_url  NVARCHAR(500)  NOT NULL,
+        fetched_at  DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_etf_holdings_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_etf_holdings PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_etf_holdings UNIQUE (etf_code, trade_date, stock_code)
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_fundamentals', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_fundamentals (
+        id              BIGINT         IDENTITY(1,1) NOT NULL,
+        trade_date      DATE           NOT NULL,
+        stock_code      VARCHAR(10)    NOT NULL,
+        stock_name      NVARCHAR(100)  NOT NULL,
+        close_price     DECIMAL(10,2)  NULL,
+        dividend_yield  DECIMAL(8,4)   NULL,
+        dividend_year   NVARCHAR(20)   NULL,
+        pe_ratio        DECIMAL(12,4)  NULL,
+        pb_ratio        DECIMAL(12,4)  NULL,
+        financial_period NVARCHAR(30)  NULL,
+        source_url      NVARCHAR(500)  NOT NULL,
+        fetched_at      DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_fundamentals_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_fundamentals PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_fundamentals UNIQUE (trade_date, stock_code)
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_stock_industries', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_stock_industries (
+        stock_code    VARCHAR(10)    NOT NULL,
+        stock_name    NVARCHAR(100)  NULL,
+        industry_name NVARCHAR(100)  NOT NULL,
+        source_url    NVARCHAR(500)  NOT NULL,
+        fetched_at    DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_stock_industries_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_stock_industries PRIMARY KEY (stock_code)
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_topics', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_topics (
+        topic_code   VARCHAR(50)    NOT NULL,
+        topic_name   NVARCHAR(100)  NOT NULL,
+        description  NVARCHAR(300)  NULL,
+        CONSTRAINT pk_assistant_topics PRIMARY KEY (topic_code)
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_stock_topics', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_stock_topics (
+        topic_code   VARCHAR(50)    NOT NULL,
+        stock_code   VARCHAR(10)    NOT NULL,
+        note         NVARCHAR(300)  NULL,
+        source_type  NVARCHAR(50)   NOT NULL,
+        updated_at   DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_stock_topics_updated DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_stock_topics PRIMARY KEY (topic_code, stock_code),
+        CONSTRAINT fk_assistant_stock_topics_topic FOREIGN KEY (topic_code)
+          REFERENCES dbo.assistant_topics(topic_code) ON DELETE CASCADE
       );
     END;
   `)

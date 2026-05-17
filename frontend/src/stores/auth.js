@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { loginApi, registerApi, setToken, clearToken, getToken } from '@/services/api'
+import { useAssistantStore } from '@/stores/assistant'
 
 // 使用者基本資料快取在 localStorage，讓重新整理後路由守衛仍能同步判斷登入狀態
 // （真正的資料來源是後端 ncu_db，這裡只是 UX 用的快取）
@@ -69,6 +70,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    const assistant = useAssistantStore()
+    assistant.reset()
     user.value = null
     error.value = ''
     clearToken()

@@ -213,6 +213,54 @@ END;
 GO
 
 /* ─────────────────────────────────────────────────────────────────────────
+   5-1. assistant_stock_industries — AI 助理使用的官方產業分類快取
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.assistant_stock_industries', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_stock_industries (
+        stock_code     VARCHAR(10)    NOT NULL,
+        stock_name     NVARCHAR(100)  NULL,
+        industry_name  NVARCHAR(100)  NOT NULL,
+        source_url     NVARCHAR(500)  NOT NULL,
+        fetched_at     DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_stock_industries_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_stock_industries PRIMARY KEY (stock_code)
+    );
+END;
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   5-2. assistant_topics — AI 助理使用的題材字典
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.assistant_topics', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_topics (
+        topic_code    VARCHAR(50)    NOT NULL,
+        topic_name    NVARCHAR(100)  NOT NULL,
+        description   NVARCHAR(300)  NULL,
+        CONSTRAINT pk_assistant_topics PRIMARY KEY (topic_code)
+    );
+END;
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   5-3. assistant_stock_topics — 股票與題材的對照表
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.assistant_stock_topics', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_stock_topics (
+        topic_code    VARCHAR(50)    NOT NULL,
+        stock_code    VARCHAR(10)    NOT NULL,
+        note          NVARCHAR(300)  NULL,
+        source_type   NVARCHAR(50)   NOT NULL,
+        updated_at    DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_stock_topics_updated DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_stock_topics PRIMARY KEY (topic_code, stock_code),
+        CONSTRAINT fk_assistant_stock_topics_topic FOREIGN KEY (topic_code)
+          REFERENCES dbo.assistant_topics(topic_code) ON DELETE CASCADE
+    );
+END;
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
    6. portfolios — 投資練習組合（與 users 1:1）
    ───────────────────────────────────────────────────────────────────────── */
 IF OBJECT_ID(N'dbo.portfolios', N'U') IS NULL
@@ -384,9 +432,9 @@ GO
 /* ─────────────────────────────────────────────────────────────────────────
    14. stock_sync — 股票歷史「同步狀態」中繼表（原始設計沒有，後來新增）
    ─────────────────────────────────────────────────────────────────────────
-   用途：記錄每檔股票的歷史日線「上次從 TWSE 同步的時間與來源」，讓後端判斷
-         要不要重新去官方抓真實歷史（seed 測試資料 → twse 真實資料 的切換依據）。
-   - source: 'seed'（初始測試資料）/ 'twse'（完整真實歷史就緒）
+   用途：記錄每檔股票的歷史日線「上次同步的時間與來源」，讓後端判斷
+         要不要重新抓真實歷史（seed 測試資料 → twse / finmind 真實資料 的切換依據）。
+   - source: 'seed'（初始測試資料）/ 'twse' / 'finmind'（完整真實歷史就緒）
    - 後端 db.js 啟動時也會自動補建這張表（程式端 ensureSchema），
      所以就算忘了在 SSMS 跑這段，後端開起來也會自動建立；此處列出是為了
      讓手動建表 / 技術交接時看得到完整結構。
@@ -400,6 +448,45 @@ BEGIN
         CONSTRAINT pk_stock_sync   PRIMARY KEY (stock_id),
         CONSTRAINT fk_stock_sync_s FOREIGN KEY (stock_id)
                                    REFERENCES dbo.stocks(id) ON DELETE CASCADE
+    );
+END;
+GO
+
+IF OBJECT_ID(N'dbo.assistant_etf_holdings', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_etf_holdings (
+        id          BIGINT         IDENTITY(1,1) NOT NULL,
+        etf_code    VARCHAR(10)    NOT NULL,
+        trade_date  DATE           NOT NULL,
+        stock_code  VARCHAR(10)    NOT NULL,
+        stock_name  NVARCHAR(100)  NOT NULL,
+        quantity    BIGINT         NULL,
+        weight      DECIMAL(8,4)   NULL,
+        source_url  NVARCHAR(500)  NOT NULL,
+        fetched_at  DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_etf_holdings_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_etf_holdings PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_etf_holdings UNIQUE (etf_code, trade_date, stock_code)
+    );
+END;
+GO
+
+IF OBJECT_ID(N'dbo.assistant_fundamentals', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_fundamentals (
+        id               BIGINT         IDENTITY(1,1) NOT NULL,
+        trade_date       DATE           NOT NULL,
+        stock_code       VARCHAR(10)    NOT NULL,
+        stock_name       NVARCHAR(100)  NOT NULL,
+        close_price      DECIMAL(10,2)  NULL,
+        dividend_yield   DECIMAL(8,4)   NULL,
+        dividend_year    NVARCHAR(20)   NULL,
+        pe_ratio         DECIMAL(12,4)  NULL,
+        pb_ratio         DECIMAL(12,4)  NULL,
+        financial_period NVARCHAR(30)   NULL,
+        source_url       NVARCHAR(500)  NOT NULL,
+        fetched_at       DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_fundamentals_fetched DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_assistant_fundamentals PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_fundamentals UNIQUE (trade_date, stock_code)
     );
 END;
 GO
@@ -507,7 +594,7 @@ WHERE t.name IN (
     'users','investor_profiles','sectors','stocks','stock_daily_bars',
     'portfolios','holdings','orders','decision_cards','decision_card_tags',
     'knowledge_base','knowledge_sentences','knowledge_related_tags',
-    'stock_sync'
+    'stock_sync','assistant_etf_holdings','assistant_fundamentals'
 )
 GROUP BY t.name
 ORDER BY t.name;

@@ -42,6 +42,8 @@ import {
   getStockBars,
   getQuote,
 } from './dao.js'
+import { answerStockQuestion } from './assistant.js'
+import { buildAssistantScreeningDiagnostics } from './assistantData.js'
 
 const PORT = Number(process.env.PORT || 3001)
 
@@ -172,6 +174,17 @@ const server = http.createServer(async (req, res) => {
      */
     const path = requestUrl.pathname
 
+    if (path === '/api/assistant/diagnostics' && req.method === 'GET') {
+      try {
+        const etfCode = requestUrl.searchParams.get('etf') || '0050'
+        const diagnostics = await buildAssistantScreeningDiagnostics(etfCode)
+        sendJson(res, 200, { ok: true, ...diagnostics })
+      } catch (error) {
+        sendDaoError(res, error)
+      }
+      return
+    }
+
     // 註冊：POST /api/auth/register
     if (path === '/api/auth/register' && req.method === 'POST') {
       try {
@@ -203,7 +216,8 @@ const server = http.createServer(async (req, res) => {
       path === '/api/portfolio/setup' ||
       path === '/api/portfolio/reset' ||
       path === '/api/orders/buy' ||
-      path === '/api/orders/sell'
+      path === '/api/orders/sell' ||
+      path === '/api/assistant/chat'
 
     if (isAppApi) {
       const userId = getAuthUserId(req)
@@ -264,6 +278,13 @@ const server = http.createServer(async (req, res) => {
           return
         }
 
+        if (path === '/api/assistant/chat' && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await answerStockQuestion(body.message)
+          sendJson(res, 200, { ok: true, ...result })
+          return
+        }
+
         // 路徑對但方法不對
         sendError(res, 405, `Method ${req.method} not allowed for ${path}.`)
       } catch (error) {
@@ -292,12 +313,15 @@ const server = http.createServer(async (req, res) => {
       )
       const refresh = requestUrl.searchParams.get('refresh') === '1'
       const quick = requestUrl.searchParams.get('quick') === '1'
+      const before = requestUrl.searchParams.get('before') || undefined
+      const months = requestUrl.searchParams.get('months') || undefined
       try {
-        const result = await getStockBars(code, { refresh, quick })
+        const result = await getStockBars(code, { refresh, quick, before, months })
         sendJson(res, 200, {
           ok: true,
           source: result.source,
           historyStatus: result.historyStatus,
+          hasMoreBefore: result.hasMoreBefore,
           code,
           count: result.bars.length,
           data: result.bars,

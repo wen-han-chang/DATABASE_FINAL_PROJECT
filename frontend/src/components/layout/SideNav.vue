@@ -51,7 +51,7 @@
 
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { TrendingUp, LayoutDashboard, LogOut, Search, Wallet } from 'lucide-vue-next'
+import { TrendingUp, LayoutDashboard, LogOut, Search, Wallet, Bot } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 
 const auth   = useAuthStore()
@@ -62,6 +62,7 @@ const navItems = [
   { path: '/',        label: '首頁總覽', icon: LayoutDashboard },
   { path: '/search',  label: '個股查詢', icon: Search },
   { path: '/trading', label: '下單練習', icon: Wallet },
+  { path: '/assistant', label: 'AI 助理', icon: Bot },
 ]
 
 function handleLogout() {
