@@ -10,10 +10,21 @@
 </template>
 
 <script setup>
+import { watch } from 'vue'
 import SideNav from '@/components/layout/SideNav.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useWatchlistStore } from '@/stores/watchlist'
 
 const auth = useAuthStore()
+const watchlist = useWatchlistStore()
+
+watch(
+  () => auth.isLoggedIn,
+  (isLoggedIn) => {
+    if (isLoggedIn) watchlist.load()
+  },
+  { immediate: true },
+)
 </script>
 
 <style>

@@ -591,6 +591,62 @@ export async function getPortfolio(userId) {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// 自選清單：後端保存，供股票建議分析使用
+// ──────────────────────────────────────────────────────────────────────────
+
+export async function getWatchlist(userId) {
+  return query(
+    `SELECT s.code, s.name, sec.name AS sector, w.created_at AS createdAt
+     FROM dbo.watchlists w
+     JOIN dbo.stocks s ON s.id = w.stock_id
+     JOIN dbo.sectors sec ON sec.id = s.sector_id
+     WHERE w.user_id = @uid
+     ORDER BY w.created_at DESC, s.code ASC`,
+    { uid: userId },
+  )
+}
+
+export async function syncWatchlist(userId, codes = []) {
+  const normalizedCodes = [...new Set(
+    (codes || [])
+      .map((code) => String(code || '').trim())
+      .filter(Boolean),
+  )]
+
+  const stockRows = normalizedCodes.length
+    ? await query(
+      `SELECT id, code
+       FROM dbo.stocks
+       WHERE code IN (${normalizedCodes.map((_, index) => `@c${index}`).join(', ')})`,
+      Object.fromEntries(normalizedCodes.map((code, index) => [`c${index}`, code])),
+    )
+    : []
+
+  const validCodeSet = new Set(stockRows.map((row) => row.code))
+  const invalidCodes = normalizedCodes.filter((code) => !validCodeSet.has(code))
+  if (invalidCodes.length) {
+    throw httpError(400, `自選清單包含不存在的股票代碼：${invalidCodes.join(', ')}`)
+  }
+
+  await withTransaction(async (tx) => {
+    const delReq = new sql.Request(tx)
+    await delReq
+      .input('uid', sql.BigInt, userId)
+      .query('DELETE FROM dbo.watchlists WHERE user_id = @uid')
+
+    for (const row of stockRows) {
+      await new sql.Request(tx)
+        .input('uid', sql.BigInt, userId)
+        .input('stockId', sql.SmallInt, row.id)
+        .query(`INSERT INTO dbo.watchlists (user_id, stock_id)
+                VALUES (@uid, @stockId)`)
+    }
+  })
+
+  return getWatchlist(userId)
+}
+
 // 交易共用：在交易內抓 portfolio 與 stock，缺一不可
 async function loadPortfolioAndStock(tx, userId, code) {
   const pRes = await new sql.Request(tx)

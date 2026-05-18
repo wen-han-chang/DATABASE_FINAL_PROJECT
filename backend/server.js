@@ -37,6 +37,8 @@ import {
   setupPortfolio,
   resetPortfolio,
   getPortfolio,
+  getWatchlist,
+  syncWatchlist,
   buyStock,
   sellStock,
   getStockBars,
@@ -48,6 +50,10 @@ import {
 } from './dao.js'
 import { answerStockQuestion } from './assistant.js'
 import { buildAssistantScreeningDiagnostics } from './assistantData.js'
+import {
+  generateOnDemandRecommendationForUser,
+  getLatestRecommendation,
+} from './recommendations.js'
 
 const PORT = Number(process.env.PORT || 3001)
 
@@ -220,12 +226,15 @@ const server = http.createServer(async (req, res) => {
       path === '/api/portfolio/setup' ||
       path === '/api/portfolio/reset' ||
       path === '/api/portfolio/margin-positions' ||
+      path === '/api/watchlist' ||
+      path === '/api/watchlist/sync' ||
       path === '/api/orders/buy' ||
       path === '/api/orders/sell' ||
       path === '/api/orders/margin-open' ||
       path === '/api/orders/margin-cover' ||
       path === '/api/orders/margin-settle' ||
-      path === '/api/assistant/chat'
+      path === '/api/assistant/chat' ||
+      path === '/api/recommendations/latest'
 
     if (isAppApi) {
       const userId = getAuthUserId(req)
@@ -277,6 +286,19 @@ const server = http.createServer(async (req, res) => {
           return
         }
 
+        if (path === '/api/watchlist' && req.method === 'GET') {
+          const items = await getWatchlist(userId)
+          sendJson(res, 200, { ok: true, items })
+          return
+        }
+
+        if (path === '/api/watchlist/sync' && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const items = await syncWatchlist(userId, body.codes || [])
+          sendJson(res, 200, { ok: true, items })
+          return
+        }
+
         // 槓桿開倉（融券 / 融資）
         if (path === '/api/orders/margin-open' && req.method === 'POST') {
           const body = await readJsonBody(req)
@@ -320,6 +342,13 @@ const server = http.createServer(async (req, res) => {
           const body = await readJsonBody(req)
           const result = await answerStockQuestion(body.message)
           sendJson(res, 200, { ok: true, ...result })
+          return
+        }
+
+        if (path === '/api/recommendations/latest' && req.method === 'GET') {
+          const latest = await generateOnDemandRecommendationForUser(userId)
+            || await getLatestRecommendation(userId)
+          sendJson(res, 200, { ok: true, recommendation: latest })
           return
         }
 
