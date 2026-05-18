@@ -41,6 +41,10 @@ import {
   sellStock,
   getStockBars,
   getQuote,
+  getMarginPositions,
+  openMarginPosition,
+  coverMarginPosition,
+  settleDefaultPositions,
 } from './dao.js'
 import { answerStockQuestion } from './assistant.js'
 import { buildAssistantScreeningDiagnostics } from './assistantData.js'
@@ -215,8 +219,12 @@ const server = http.createServer(async (req, res) => {
       path === '/api/portfolio' ||
       path === '/api/portfolio/setup' ||
       path === '/api/portfolio/reset' ||
+      path === '/api/portfolio/margin-positions' ||
       path === '/api/orders/buy' ||
       path === '/api/orders/sell' ||
+      path === '/api/orders/margin-open' ||
+      path === '/api/orders/margin-cover' ||
+      path === '/api/orders/margin-settle' ||
       path === '/api/assistant/chat'
 
     if (isAppApi) {
@@ -259,6 +267,36 @@ const server = http.createServer(async (req, res) => {
         if (path === '/api/portfolio/reset' && req.method === 'POST') {
           await resetPortfolio(userId)
           sendJson(res, 200, { ok: true })
+          return
+        }
+
+        // 槓桿部位查詢
+        if (path === '/api/portfolio/margin-positions' && req.method === 'GET') {
+          const positions = await getMarginPositions(userId)
+          sendJson(res, 200, { ok: true, positions })
+          return
+        }
+
+        // 槓桿開倉（融券 / 融資）
+        if (path === '/api/orders/margin-open' && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await openMarginPosition(userId, body.code, body.shares, body.price, body.marginType)
+          sendJson(res, 200, result)
+          return
+        }
+
+        // 槓桿平倉（融券回補 / 融資賣出）
+        if (path === '/api/orders/margin-cover' && req.method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await coverMarginPosition(userId, body.positionId, body.price)
+          sendJson(res, 200, result)
+          return
+        }
+
+        // 違約交割（強制平倉）
+        if (path === '/api/orders/margin-settle' && req.method === 'POST') {
+          const result = await settleDefaultPositions(userId)
+          sendJson(res, 200, result)
           return
         }
 

@@ -74,7 +74,7 @@
           <div class="bg-brand-primary rounded-2xl p-4 text-white col-span-2 sm:col-span-1">
             <p class="text-xs text-slate-400 mb-1">總資產</p>
             <p class="text-xl font-bold font-mono">{{ fmt(portfolio.totalAssets) }}</p>
-            <p class="text-xs mt-1" :class="portfolio.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'">
+            <p class="text-xs mt-1" :class="portfolio.totalPnL >= 0 ? 'text-red-400' : 'text-green-400'">
               {{ portfolio.totalPnL >= 0 ? '+' : '' }}{{ fmt(portfolio.totalPnL) }}
               （{{ portfolio.totalPnLPct >= 0 ? '+' : '' }}{{ portfolio.totalPnLPct.toFixed(2) }}%）
             </p>
@@ -220,8 +220,37 @@
                   </span>
                 </h3>
 
-                <!-- Buy / Sell toggle -->
-                <div class="flex rounded-xl border border-slate-200 overflow-hidden">
+                <!-- 現股 / 融券 / 融資 mode -->
+                <div class="flex rounded-xl border border-slate-200 overflow-hidden text-xs">
+                  <button @click="marginType = 'normal'; orderType = 'buy'"
+                    class="flex-1 py-2 font-bold transition-all"
+                    :class="marginType === 'normal' ? 'bg-brand-primary text-white' : 'text-slate-400 hover:bg-slate-50'">
+                    現股
+                  </button>
+                  <button @click="marginType = 'short'; orderType = 'sell'"
+                    class="flex-1 py-2 font-bold transition-all"
+                    :class="marginType === 'short' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:bg-slate-50'"
+                    title="融券：先賣後買，當日回補">
+                    融券↓
+                  </button>
+                  <button @click="marginType = 'margin'; orderType = 'buy'"
+                    class="flex-1 py-2 font-bold transition-all"
+                    :class="marginType === 'margin' ? 'bg-orange-500 text-white' : 'text-slate-400 hover:bg-slate-50'"
+                    title="融資：借錢買入，當日賣出">
+                    融資↑
+                  </button>
+                </div>
+
+                <!-- 融券/融資 說明 -->
+                <div v-if="marginType !== 'normal'"
+                  class="rounded-lg px-3 py-2 text-xs"
+                  :class="marginType === 'short' ? 'bg-purple-50 text-purple-700' : 'bg-orange-50 text-orange-700'">
+                  <span v-if="marginType === 'short'">⚠️ 融券：先賣出取得現金，當日交易時間內須回補（買回），逾時違約交割。</span>
+                  <span v-else>⚠️ 融資：借款買入股票，當日交易時間內須平倉（賣出），逾時違約交割。</span>
+                </div>
+
+                <!-- Buy / Sell toggle（現股才顯示完整切換） -->
+                <div v-if="marginType === 'normal'" class="flex rounded-xl border border-slate-200 overflow-hidden">
                   <button @click="orderType = 'buy'" class="flex-1 py-2.5 text-sm font-bold transition-all"
                     :class="orderType === 'buy' ? 'bg-stock-up text-white' : 'text-slate-400 hover:bg-slate-50'">
                     買入
@@ -315,11 +344,13 @@
                   :disabled="!canOrder"
                   class="w-full py-3.5 rounded-2xl font-bold text-white text-sm transition-all active:scale-[0.98]
                          disabled:opacity-40 disabled:cursor-not-allowed"
-                  :class="orderType === 'buy'
-                    ? 'bg-stock-up hover:bg-red-600'
-                    : 'bg-stock-down hover:bg-green-600'">
-                  確認{{ orderType === 'buy' ? '買入' : '賣出' }}
-                  {{ tradeMode === 'lot' ? `${qty} 張` : `${qty} 股` }}
+                  :class="marginType === 'short' ? 'bg-purple-600 hover:bg-purple-700'
+                         : marginType === 'margin' ? 'bg-orange-500 hover:bg-orange-600'
+                         : orderType === 'buy' ? 'bg-stock-up hover:bg-red-600'
+                         : 'bg-stock-down hover:bg-green-600'">
+                  <span v-if="marginType === 'short'">融券開倉（先賣）{{ tradeMode === 'lot' ? `${qty} 張` : `${qty} 股` }}</span>
+                  <span v-else-if="marginType === 'margin'">融資開倉（借買）{{ tradeMode === 'lot' ? `${qty} 張` : `${qty} 股` }}</span>
+                  <span v-else>確認{{ orderType === 'buy' ? '買入' : '賣出' }} {{ tradeMode === 'lot' ? `${qty} 張` : `${qty} 股` }}</span>
                 </button>
 
                 <!-- Validation hint -->
@@ -332,8 +363,8 @@
           <div class="xl:col-span-8 space-y-4">
 
             <!-- Tab bar -->
-            <div class="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
-              <button v-for="tab in ['持股明細', '交易紀錄', '自選清單']" :key="tab"
+            <div class="flex flex-wrap gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+              <button v-for="tab in ['持股明細', '交易紀錄', '槓桿部位', '自選清單']" :key="tab"
                 @click="activeTab = tab"
                 class="px-4 py-1.5 rounded-lg text-sm font-semibold transition-all"
                 :class="activeTab === tab
@@ -343,6 +374,10 @@
                 <span v-if="tab === '持股明細' && portfolio.holdings.length"
                   class="ml-1.5 text-xs bg-blue-500 text-white px-1.5 py-0.5 rounded-full">
                   {{ portfolio.holdings.length }}
+                </span>
+                <span v-if="tab === '槓桿部位' && openMarginCount"
+                  class="ml-1.5 text-xs bg-purple-600 text-white px-1.5 py-0.5 rounded-full">
+                  {{ openMarginCount }}
                 </span>
                 <span v-if="tab === '自選清單' && watchlist.items.length"
                   class="ml-1.5 text-xs bg-amber-400 text-white px-1.5 py-0.5 rounded-full">
@@ -465,6 +500,84 @@
                 </div>
               </div>
 
+              <!-- Margin positions -->
+              <div v-else-if="activeTab === '槓桿部位'" key="margin">
+                <!-- 違約交割警告 -->
+                <div v-if="hasDefaultablePositions && !isMarketOpen"
+                  class="mb-3 bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-bold text-red-600">⚠️ 今日槓桿部位未平倉，可觸發違約交割</p>
+                    <p class="text-xs text-red-500 mt-0.5">強制結算：融券以開倉價 ×1.1 回補，融資以開倉價 ×0.9 賣出，並收 10% 面額罰款</p>
+                  </div>
+                  <button @click="doSettle"
+                    class="flex-shrink-0 px-4 py-2 rounded-xl bg-red-500 text-white text-xs font-bold
+                           hover:bg-red-600 transition-colors whitespace-nowrap">
+                    執行違約交割
+                  </button>
+                </div>
+
+                <div v-if="portfolio.marginPositions.length === 0"
+                  class="bg-white rounded-2xl border border-slate-100 shadow-sm p-12 text-center">
+                  <TrendingUp class="w-10 h-10 mx-auto text-slate-300 mb-3" />
+                  <p class="text-brand-muted text-sm">尚無槓桿部位</p>
+                  <p class="text-xs text-slate-400 mt-1">切換至「融券」或「融資」模式後下單開倉</p>
+                </div>
+                <div v-else class="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  <table class="w-full text-sm">
+                    <thead>
+                      <tr class="border-b border-slate-100 bg-slate-50">
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-brand-muted">類型</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold text-brand-muted">個股</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-brand-muted">股數</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-brand-muted">開倉價</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-brand-muted">狀態</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold text-brand-muted">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="pos in portfolio.marginPositions" :key="pos.id"
+                        class="border-b border-slate-50 last:border-0">
+                        <td class="px-4 py-3">
+                          <span class="px-2 py-0.5 rounded-md text-xs font-bold"
+                            :class="pos.marginType === 'short'
+                              ? 'bg-purple-50 text-purple-700'
+                              : 'bg-orange-50 text-orange-700'">
+                            {{ pos.marginType === 'short' ? '融券' : '融資' }}
+                          </span>
+                        </td>
+                        <td class="px-4 py-3">
+                          <p class="font-semibold text-brand-primary">{{ pos.name }}</p>
+                          <p class="text-xs text-brand-muted">{{ pos.code }}</p>
+                        </td>
+                        <td class="px-4 py-3 font-mono text-right">{{ formatSharesDisplay(pos.shares) }}</td>
+                        <td class="px-4 py-3 font-mono text-right">{{ Number(pos.entryPrice).toFixed(2) }}</td>
+                        <td class="px-4 py-3 text-right">
+                          <span class="px-2 py-0.5 rounded-md text-xs font-semibold"
+                            :class="pos.status === 'open'
+                              ? 'bg-yellow-50 text-yellow-700'
+                              : pos.status === 'covered'
+                              ? 'bg-green-50 text-green-700'
+                              : 'bg-red-50 text-red-600'">
+                            {{ pos.status === 'open' ? '持倉中' : pos.status === 'covered' ? '已平倉' : '違約' }}
+                          </span>
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                          <button v-if="pos.status === 'open'"
+                            @click="doCover(pos)"
+                            class="text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors text-white"
+                            :class="pos.marginType === 'short'
+                              ? 'bg-purple-600 hover:bg-purple-700'
+                              : 'bg-orange-500 hover:bg-orange-600'">
+                            {{ pos.marginType === 'short' ? '回補' : '平倉' }}
+                          </button>
+                          <span v-else class="text-xs text-slate-400">—</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
               <!-- Watchlist -->
               <div v-else key="watchlist">
                 <div v-if="watchlist.items.length === 0"
@@ -559,12 +672,12 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import {
   Wallet, PiggyBank, Search, X, ShoppingCart,
   RotateCcw, AlertTriangle, CheckCircle2, AlertCircle,
   Inbox, ClipboardList, Receipt, Landmark, CircleDollarSign,
-  Star,
+  Star, TrendingUp,
 } from 'lucide-vue-next'
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useWatchlistStore } from '@/stores/watchlist'
@@ -704,6 +817,7 @@ function clearSearch() {
   livePrice.value     = 0
   livePrevClose.value = 0
   quoteError.value    = ''
+  stopPricePolling()
   searchInput.value?.focus()
 }
 function pickStock(stock) {
@@ -716,6 +830,7 @@ function pickStock(stock) {
   livePrice.value     = 0
   livePrevClose.value = 0
   fetchLivePrice(stock.code)
+  startPricePolling(stock.code)
 }
 function quickSelect(code) {
   const stock = findStock(code)
@@ -728,6 +843,8 @@ const livePrice     = ref(0)
 const livePrevClose = ref(0)
 const quoteLoading  = ref(false)
 const quoteError    = ref('')
+
+let priceTimer = null
 
 async function fetchLivePrice(code) {
   quoteLoading.value = true
@@ -742,6 +859,19 @@ async function fetchLivePrice(code) {
     quoteLoading.value = false
   }
 }
+
+function startPricePolling(code) {
+  stopPricePolling()
+  priceTimer = setInterval(() => {
+    if (activeStock.value?.code === code) fetchLivePrice(code)
+  }, 5000)
+}
+
+function stopPricePolling() {
+  if (priceTimer) { clearInterval(priceTimer); priceTimer = null }
+}
+
+onUnmounted(stopPricePolling)
 
 const priceChange    = computed(() => livePrice.value - livePrevClose.value)
 const priceChangePct = computed(() =>
@@ -780,6 +910,7 @@ const orderType  = ref('buy')
 const tradeMode  = ref('lot')   // 'lot' = 整張, 'share' = 零股
 const qty        = ref(1)       // 整張模式為張數；零股模式為股數
 const activeTab  = ref('持股明細')
+const marginType = ref('normal') // 'normal' | 'short' | 'margin'
 
 watch(tradeMode, () => { qty.value = 1 })
 
@@ -829,6 +960,8 @@ const totalAmount = computed(() =>
 const validationMsg = computed(() => {
   if (!activeStock.value || qty.value < 1) return ''
   if (!isMarketOpen.value) return marketStatusMsg.value
+  // 融券 / 融資 不做現金/持股檢查（槓桿模式）
+  if (marginType.value !== 'normal') return ''
   if (orderType.value === 'buy' && portfolio.cash < totalAmount.value) {
     return `現金不足，需 ${fmt(totalAmount.value)} 元（可用 ${fmt(portfolio.cash)} 元）`
   }
@@ -842,6 +975,18 @@ const validationMsg = computed(() => {
   return ''
 })
 
+// 今日有未平倉槓桿部位（已收盤時顯示違約交割按鈕）
+const openMarginCount = computed(() =>
+  portfolio.marginPositions.filter((p) => p.status === 'open').length
+)
+
+const hasDefaultablePositions = computed(() => {
+  const today = new Date().toISOString().slice(0, 10)
+  return portfolio.marginPositions.some(
+    (p) => p.status === 'open' && String(p.openedAt).slice(0, 10) === today,
+  )
+})
+
 const canOrder = computed(() =>
   activeStock.value && qty.value >= 1 && livePrice.value > 0 && !quoteLoading.value && !validationMsg.value
 )
@@ -849,11 +994,40 @@ const canOrder = computed(() =>
 // ── Place order ────────────────────────────────────────────
 async function placeOrder() {
   if (!canOrder.value) return
-  const result = await (orderType.value === 'buy'
-    ? portfolio.buy(activeStock.value, actualShares.value, livePrice.value)
-    : portfolio.sell(activeStock.value, actualShares.value, livePrice.value))
+  let result
+  if (marginType.value === 'short' || marginType.value === 'margin') {
+    result = await portfolio.openMargin(activeStock.value, actualShares.value, livePrice.value, marginType.value)
+    if (result.ok) activeTab.value = '槓桿部位'
+  } else {
+    result = await (orderType.value === 'buy'
+      ? portfolio.buy(activeStock.value, actualShares.value, livePrice.value)
+      : portfolio.sell(activeStock.value, actualShares.value, livePrice.value))
+  }
   showToast(result.ok, result.msg)
   if (result.ok) qty.value = 1
+}
+
+// 平倉（需先刷新報價取得現價）
+async function doCover(pos) {
+  quoteLoading.value = true
+  try {
+    const res = await (await import('@/services/twseApi')).getQuote(pos.code)
+    const price = res.data?.price ?? Number(pos.entryPrice)
+    const result = await portfolio.coverMargin(pos.id, price)
+    showToast(result.ok, result.msg)
+  } catch (e) {
+    showToast(false, `平倉失敗：${e.message}`)
+  } finally {
+    quoteLoading.value = false
+  }
+}
+
+// 違約交割
+async function doSettle() {
+  const result = await portfolio.settleDefault()
+  showToast(result.ok, result.ok
+    ? `違約交割完成，結算 ${result.settled} 筆，共收罰款 ${result.totalPenalty?.toLocaleString('zh-TW')} 元`
+    : result.msg)
 }
 
 // ── Toast ──────────────────────────────────────────────────

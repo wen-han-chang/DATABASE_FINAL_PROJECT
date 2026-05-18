@@ -368,7 +368,7 @@ export async function getStockBars(code, opts = {}) {
 }
 
 // 即時報價的記憶體快取：同一檔 20 秒內不重複打 TWSE（避免濫用）
-const QUOTE_TTL_MS = 20000
+const QUOTE_TTL_MS = 5000
 const quoteCache = new Map() // code -> { data, ts }
 
 /**
@@ -776,6 +776,333 @@ export async function sellStock(userId, code, shares, price) {
     return {
       ok: true,
       msg: `賣出 ${stock.name} ${displayQty}，到帳 ${Math.round(received)} 元（手續費 ${Math.round(fee)} 元，證交稅 ${Math.round(tax)} 元${dayTradeNote}）`,
+    }
+  })
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 槓桿部位：融券（先賣後買）/ 融資（借錢買）/ 違約交割
+// ──────────────────────────────────────────────────────────────────────────
+
+/**
+ * 查詢使用者目前所有 open 的槓桿部位。
+ */
+export async function getMarginPositions(userId) {
+  const pRows = await query(
+    'SELECT id FROM dbo.portfolios WHERE user_id = @uid',
+    { uid: userId },
+  )
+  if (!pRows[0]) return []
+  const pid = pRows[0].id
+
+  const rows = await query(
+    `SELECT sp.id, sp.margin_type AS marginType, s.code, s.name,
+            sp.shares, sp.entry_price AS entryPrice,
+            sp.face_amount AS faceAmount, sp.fee, sp.tax,
+            sp.cash_flow AS cashFlow, sp.status, sp.opened_at AS openedAt
+     FROM dbo.short_positions sp
+     JOIN dbo.stocks s ON s.id = sp.stock_id
+     WHERE sp.portfolio_id = @pid
+     ORDER BY sp.opened_at DESC`,
+    { pid },
+  )
+  return rows.map((r) => ({
+    ...r,
+    shares: Number(r.shares),
+    entryPrice: Number(r.entryPrice),
+    faceAmount: Number(r.faceAmount),
+    fee: Number(r.fee),
+    tax: Number(r.tax),
+    cashFlow: Number(r.cashFlow),
+  }))
+}
+
+/**
+ * 開倉：融券（先賣）或融資（借買）。
+ * 融券：現金 += (face - fee - tax)，不動持股。
+ * 融資：持股 += shares，不動現金（負債由 cash_flow 追蹤）。
+ */
+export async function openMarginPosition(userId, code, shares, price, marginType) {
+  checkTradingTime()
+  const nShares = Number(shares)
+  const nPrice = Number(price)
+  if (!Number.isInteger(nShares) || nShares <= 0) throw httpError(400, '股數必須是正整數')
+  if (!(nPrice > 0)) throw httpError(400, '價格需大於 0')
+  if (!['short', 'margin'].includes(marginType)) throw httpError(400, '槓桿類型不合法')
+
+  const isOddLot = nShares < 1000
+
+  return withTransaction(async (tx) => {
+    const { portfolio, stock } = await loadPortfolioAndStock(tx, userId, code)
+
+    const faceAmount = +(nShares * nPrice).toFixed(2)
+    const fee = calcFee(faceAmount, isOddLot)
+
+    if (marginType === 'short') {
+      // 融券：先賣 → 現金到帳 = face - fee - tax（賣方稅率）
+      const tax = calcTax(faceAmount, !!stock.is_etf, false)
+      const cashFlow = +(faceAmount - fee - tax).toFixed(2)
+
+      await new sql.Request(tx)
+        .input('pid', sql.BigInt, portfolio.id)
+        .input('sid', sql.SmallInt, stock.id)
+        .input('sh', sql.Int, nShares)
+        .input('ep', sql.Decimal(10, 4), nPrice)
+        .input('fa', sql.Decimal(15, 2), faceAmount)
+        .input('fe', sql.Decimal(10, 2), fee)
+        .input('tx', sql.Decimal(10, 2), tax)
+        .input('cf', sql.Decimal(15, 2), cashFlow)
+        .query(`INSERT INTO dbo.short_positions
+                  (portfolio_id, stock_id, margin_type, shares, entry_price, face_amount, fee, tax, cash_flow)
+                VALUES (@pid, @sid, 'short', @sh, @ep, @fa, @fe, @tx, @cf)`)
+
+      await new sql.Request(tx)
+        .input('pid', sql.BigInt, portfolio.id)
+        .input('cf', sql.Decimal(15, 2), cashFlow)
+        .query('UPDATE dbo.portfolios SET cash = cash + @cf WHERE id = @pid')
+
+      const qty = nShares >= 1000 ? `${nShares / 1000} 張` : `${nShares} 股（零股）`
+      return { ok: true, msg: `融券 ${stock.name} ${qty}，到帳 ${Math.round(cashFlow)} 元（需當日回補）` }
+    } else {
+      // 融資：借款買入 → 持股增加，cash_flow 記錄借款金額（負值）
+      const debt = +(faceAmount + fee).toFixed(2)
+      const cashFlow = -debt
+
+      await new sql.Request(tx)
+        .input('pid', sql.BigInt, portfolio.id)
+        .input('sid', sql.SmallInt, stock.id)
+        .input('sh', sql.Int, nShares)
+        .input('ep', sql.Decimal(10, 4), nPrice)
+        .input('fa', sql.Decimal(15, 2), faceAmount)
+        .input('fe', sql.Decimal(10, 2), fee)
+        .input('cf', sql.Decimal(15, 2), cashFlow)
+        .query(`INSERT INTO dbo.short_positions
+                  (portfolio_id, stock_id, margin_type, shares, entry_price, face_amount, fee, tax, cash_flow)
+                VALUES (@pid, @sid, 'margin', @sh, @ep, @fa, @fe, 0, @cf)`)
+
+      // 持股 upsert
+      const hRes = await new sql.Request(tx)
+        .input('pid', sql.BigInt, portfolio.id)
+        .input('sid', sql.SmallInt, stock.id)
+        .query('SELECT id, lots, avg_cost FROM dbo.holdings WHERE portfolio_id = @pid AND stock_id = @sid')
+
+      if (hRes.recordset.length > 0) {
+        const h = hRes.recordset[0]
+        const newShares = h.lots + nShares
+        const newAvg = +(((h.lots * Number(h.avg_cost)) + (nShares * nPrice)) / newShares).toFixed(4)
+        await new sql.Request(tx)
+          .input('id', sql.BigInt, h.id)
+          .input('sh', sql.Int, newShares)
+          .input('avg', sql.Decimal(10, 4), newAvg)
+          .query('UPDATE dbo.holdings SET lots = @sh, avg_cost = @avg WHERE id = @id')
+      } else {
+        await new sql.Request(tx)
+          .input('pid', sql.BigInt, portfolio.id)
+          .input('sid', sql.SmallInt, stock.id)
+          .input('sh', sql.Int, nShares)
+          .input('avg', sql.Decimal(10, 4), nPrice)
+          .query(`INSERT INTO dbo.holdings (portfolio_id, stock_id, lots, avg_cost)
+                  VALUES (@pid, @sid, @sh, @avg)`)
+      }
+
+      const qty = nShares >= 1000 ? `${nShares / 1000} 張` : `${nShares} 股（零股）`
+      return { ok: true, msg: `融資 ${stock.name} ${qty}，股票已入帳（需當日賣出）` }
+    }
+  })
+}
+
+/**
+ * 平倉：融券回補（買回）或融資賣出（還股）。
+ * 融券回補：現金 -= (buy_face + buy_fee)
+ * 融資平倉：持股 -= shares，現金 += (sell_face - fee - tax)
+ */
+export async function coverMarginPosition(userId, positionId, price) {
+  checkTradingTime()
+  const nPrice = Number(price)
+  if (!(nPrice > 0)) throw httpError(400, '價格需大於 0')
+
+  return withTransaction(async (tx) => {
+    const pRes = await new sql.Request(tx)
+      .input('uid', sql.BigInt, userId)
+      .query('SELECT id, cash FROM dbo.portfolios WHERE user_id = @uid')
+    if (!pRes.recordset[0]) throw httpError(400, '尚未設定投資組合')
+    const { id: pid, cash } = pRes.recordset[0]
+
+    const spRes = await new sql.Request(tx)
+      .input('id', sql.BigInt, positionId)
+      .input('pid', sql.BigInt, pid)
+      .query(`SELECT sp.id, sp.margin_type, sp.shares, sp.entry_price,
+                     sp.face_amount AS origFace, sp.cash_flow AS origCF,
+                     s.id AS stockId, s.name, s.is_etf
+              FROM dbo.short_positions sp
+              JOIN dbo.stocks s ON s.id = sp.stock_id
+              WHERE sp.id = @id AND sp.portfolio_id = @pid AND sp.status = 'open'`)
+
+    if (!spRes.recordset[0]) throw httpError(404, '找不到開倉部位或已平倉')
+    const pos = spRes.recordset[0]
+    const nShares = Number(pos.shares)
+    const isOddLot = nShares < 1000
+    const coverFace = +(nShares * nPrice).toFixed(2)
+
+    if (pos.margin_type === 'short') {
+      // 融券回補：買回股票 → 扣現金
+      const buyFee = calcFee(coverFace, isOddLot)
+      const cost = +(coverFace + buyFee).toFixed(2)
+
+      if (Number(cash) < cost) {
+        throw httpError(400, `現金不足以回補，需 ${Math.round(cost)} 元，可用 ${Math.round(Number(cash))} 元`)
+      }
+
+      await new sql.Request(tx)
+        .input('pid', sql.BigInt, pid)
+        .input('cost', sql.Decimal(15, 2), cost)
+        .query('UPDATE dbo.portfolios SET cash = cash - @cost WHERE id = @pid')
+
+      await new sql.Request(tx)
+        .input('id', sql.BigInt, positionId)
+        .query(`UPDATE dbo.short_positions SET status = 'covered' WHERE id = @id`)
+
+      const pnl = +(Number(pos.origCF) - cost).toFixed(2)
+      const pnlNote = pnl >= 0 ? `獲利 ${Math.round(pnl)} 元` : `虧損 ${Math.round(-pnl)} 元`
+      return { ok: true, msg: `融券回補 ${pos.name}，支出 ${Math.round(cost)} 元，${pnlNote}` }
+    } else {
+      // 融資平倉：賣出 → 收現金
+      const sellFee = calcFee(coverFace, isOddLot)
+      const tax = calcTax(coverFace, !!pos.is_etf, false)
+      const received = +(coverFace - sellFee - tax).toFixed(2)
+
+      const hRes = await new sql.Request(tx)
+        .input('pid', sql.BigInt, pid)
+        .input('sid', sql.SmallInt, pos.stockId)
+        .query('SELECT id, lots FROM dbo.holdings WHERE portfolio_id = @pid AND stock_id = @sid')
+
+      const h = hRes.recordset[0]
+      if (!h || h.lots < nShares) {
+        throw httpError(400, `持股不足，持有 ${h ? h.lots : 0} 股，需 ${nShares} 股`)
+      }
+
+      if (h.lots === nShares) {
+        await new sql.Request(tx)
+          .input('id', sql.BigInt, h.id)
+          .query('DELETE FROM dbo.holdings WHERE id = @id')
+      } else {
+        await new sql.Request(tx)
+          .input('id', sql.BigInt, h.id)
+          .input('sh', sql.Int, h.lots - nShares)
+          .query('UPDATE dbo.holdings SET lots = @sh WHERE id = @id')
+      }
+
+      await new sql.Request(tx)
+        .input('pid', sql.BigInt, pid)
+        .input('recv', sql.Decimal(15, 2), received)
+        .query('UPDATE dbo.portfolios SET cash = cash + @recv WHERE id = @pid')
+
+      await new sql.Request(tx)
+        .input('id', sql.BigInt, positionId)
+        .query(`UPDATE dbo.short_positions SET status = 'covered' WHERE id = @id`)
+
+      // origCF 是負值（借款）；received 是賣出所得；損益 = received + origCF
+      const pnl = +(received + Number(pos.origCF)).toFixed(2)
+      const pnlNote = pnl >= 0 ? `獲利 ${Math.round(pnl)} 元` : `虧損 ${Math.round(-pnl)} 元`
+      return { ok: true, msg: `融資平倉 ${pos.name}，到帳 ${Math.round(received)} 元，${pnlNote}` }
+    }
+  })
+}
+
+/**
+ * 違約交割：強制平倉當日所有 open 部位，按懲罰價格結算並收 10% 面額罰款。
+ * 融券：強制以 entry_price × 1.1 回補
+ * 融資：強制以 entry_price × 0.9 賣出
+ */
+export async function settleDefaultPositions(userId) {
+  return withTransaction(async (tx) => {
+    const pRes = await new sql.Request(tx)
+      .input('uid', sql.BigInt, userId)
+      .query('SELECT id FROM dbo.portfolios WHERE user_id = @uid')
+    if (!pRes.recordset[0]) throw httpError(400, '尚未設定投資組合')
+    const pid = pRes.recordset[0].id
+
+    const spRes = await new sql.Request(tx)
+      .input('pid', sql.BigInt, pid)
+      .query(`SELECT sp.id, sp.margin_type, sp.shares, sp.entry_price,
+                     sp.face_amount AS origFace, sp.cash_flow AS origCF,
+                     s.id AS stockId, s.name, s.is_etf
+              FROM dbo.short_positions sp
+              JOIN dbo.stocks s ON s.id = sp.stock_id
+              WHERE sp.portfolio_id = @pid AND sp.status = 'open'
+                AND CAST(sp.opened_at AS DATE) = CAST(GETDATE() AS DATE)`)
+
+    if (spRes.recordset.length === 0) {
+      return { ok: true, msg: '沒有需要違約交割的部位', settled: 0, totalPenalty: 0 }
+    }
+
+    const messages = []
+    let totalPenalty = 0
+
+    for (const pos of spRes.recordset) {
+      const nShares = Number(pos.shares)
+      const isOddLot = nShares < 1000
+      const origFace = Number(pos.origFace)
+      const facePenalty = +(origFace * 0.1).toFixed(2)
+
+      if (pos.margin_type === 'short') {
+        // 融券違約：強制以 1.1× 回補
+        const penaltyPrice = +(Number(pos.entry_price) * 1.1).toFixed(4)
+        const coverFace = +(nShares * penaltyPrice).toFixed(2)
+        const buyFee = calcFee(coverFace, isOddLot)
+        const cost = +(coverFace + buyFee + facePenalty).toFixed(2)
+
+        await new sql.Request(tx)
+          .input('pid', sql.BigInt, pid)
+          .input('cost', sql.Decimal(15, 2), cost)
+          .query('UPDATE dbo.portfolios SET cash = cash - @cost WHERE id = @pid')
+      } else {
+        // 融資違約：強制以 0.9× 賣出
+        const penaltyPrice = +(Number(pos.entry_price) * 0.9).toFixed(4)
+        const sellFace = +(nShares * penaltyPrice).toFixed(2)
+        const sellFee = calcFee(sellFace, isOddLot)
+        const tax = calcTax(sellFace, !!pos.is_etf, false)
+        const received = +(sellFace - sellFee - tax - facePenalty).toFixed(2)
+
+        // 移除持股
+        const hRes = await new sql.Request(tx)
+          .input('pid', sql.BigInt, pid)
+          .input('sid', sql.SmallInt, pos.stockId)
+          .query('SELECT id, lots FROM dbo.holdings WHERE portfolio_id = @pid AND stock_id = @sid')
+        const h = hRes.recordset[0]
+        if (h) {
+          if (h.lots <= nShares) {
+            await new sql.Request(tx)
+              .input('id', sql.BigInt, h.id)
+              .query('DELETE FROM dbo.holdings WHERE id = @id')
+          } else {
+            await new sql.Request(tx)
+              .input('id', sql.BigInt, h.id)
+              .input('sh', sql.Int, h.lots - nShares)
+              .query('UPDATE dbo.holdings SET lots = @sh WHERE id = @id')
+          }
+        }
+
+        await new sql.Request(tx)
+          .input('pid', sql.BigInt, pid)
+          .input('recv', sql.Decimal(15, 2), received)
+          .query('UPDATE dbo.portfolios SET cash = cash + @recv WHERE id = @pid')
+      }
+
+      await new sql.Request(tx)
+        .input('id', sql.BigInt, pos.id)
+        .query(`UPDATE dbo.short_positions SET status = 'defaulted' WHERE id = @id`)
+
+      totalPenalty += facePenalty
+      const typeLabel = pos.margin_type === 'short' ? '融券' : '融資'
+      messages.push(`${typeLabel}違約 ${pos.name}（罰款 ${Math.round(facePenalty)} 元）`)
+    }
+
+    return {
+      ok: true,
+      msg: messages.join('；'),
+      settled: spRes.recordset.length,
+      totalPenalty: Math.round(totalPenalty),
     }
   })
 }

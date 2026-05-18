@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { getQuote } from '@/services/twseApi'
 import {
   getPortfolioApi, setupPortfolioApi, resetPortfolioApi, buyApi, sellApi,
+  getMarginPositionsApi, marginOpenApi, marginCoverApi, marginSettleApi,
 } from '@/services/api'
 
 // 本地快取只負責讓畫面重整後先有資料；真正狀態仍以後端資料庫為準。
@@ -53,12 +54,13 @@ function persistCache(state) {
 export const usePortfolioStore = defineStore('portfolio', () => {
   const cached = loadCache()
 
-  const capital    = ref(Number(cached?.capital) || 0)
-  const cash       = ref(Number(cached?.cash) || 0)
-  const holdings   = ref((cached?.holdings || []).map(normalizeHolding))
-  const orders     = ref((cached?.orders || []).map(normalizeOrder))
-  const isReady    = ref(!!cached?.isReady)
-  const livePrices = ref({}) // code → 即時報價
+  const capital         = ref(Number(cached?.capital) || 0)
+  const cash            = ref(Number(cached?.cash) || 0)
+  const holdings        = ref((cached?.holdings || []).map(normalizeHolding))
+  const orders          = ref((cached?.orders || []).map(normalizeOrder))
+  const isReady         = ref(!!cached?.isReady)
+  const livePrices      = ref({}) // code → 即時報價
+  const marginPositions = ref([]) // 槓桿部位
 
   function saveLocalSnapshot() {
     persistCache({
@@ -84,6 +86,13 @@ export const usePortfolioStore = defineStore('portfolio', () => {
       orders.value = (data.orders || []).map(normalizeOrder)
       saveLocalSnapshot()
       fetchLivePrices()
+      // 同步載入槓桿部位
+      try {
+        const mp = await getMarginPositionsApi()
+        marginPositions.value = mp.positions || []
+      } catch {
+        marginPositions.value = []
+      }
     } catch {
       // 後端暫時未開時保留本地快取，避免畫面瞬間清空。
     }
@@ -135,7 +144,51 @@ export const usePortfolioStore = defineStore('portfolio', () => {
     holdings.value = []
     orders.value = []
     isReady.value = false
+    marginPositions.value = []
     localStorage.removeItem(CACHE_KEY)
+  }
+
+  async function openMargin(stock, shares, price, marginType) {
+    const nShares = Number(shares)
+    if (!Number.isInteger(nShares) || nShares <= 0) {
+      return { ok: false, msg: '下單股數必須是正整數' }
+    }
+    try {
+      const r = await marginOpenApi({ code: stock.code, shares: nShares, price, marginType })
+      await load()
+      return { ok: true, msg: r.msg }
+    } catch (e) {
+      return { ok: false, msg: e.message }
+    }
+  }
+
+  async function coverMargin(positionId, price) {
+    try {
+      const r = await marginCoverApi({ positionId, price })
+      await load()
+      return { ok: true, msg: r.msg }
+    } catch (e) {
+      return { ok: false, msg: e.message }
+    }
+  }
+
+  async function settleDefault() {
+    try {
+      const r = await marginSettleApi()
+      await load()
+      return { ok: true, msg: r.msg, settled: r.settled, totalPenalty: r.totalPenalty }
+    } catch (e) {
+      return { ok: false, msg: e.message }
+    }
+  }
+
+  async function loadMarginPositions() {
+    try {
+      const mp = await getMarginPositionsApi()
+      marginPositions.value = mp.positions || []
+    } catch {
+      marginPositions.value = []
+    }
   }
 
   // 整張最低 20 元，零股最低 1 元
@@ -183,10 +236,11 @@ export const usePortfolioStore = defineStore('portfolio', () => {
   }
 
   return {
-    capital, cash, holdings, orders, isReady, livePrices,
+    capital, cash, holdings, orders, isReady, livePrices, marginPositions,
     holdingsWithValue, totalHoldingsValue,
     totalAssets, totalPnL, totalPnLPct,
     load, setup, reset, buy, sell, getHolding,
     fetchLivePrices, calcFee, calcTax,
+    openMargin, coverMargin, settleDefault, loadMarginPositions,
   }
 })

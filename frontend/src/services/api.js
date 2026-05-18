@@ -103,3 +103,21 @@ export function chatAssistantApi(message) {
     body: { message },
   })
 }
+
+// ── 槓桿 / 融資融券 ─────────────────────────────────────────
+export function getMarginPositionsApi() {
+  return request('/api/portfolio/margin-positions', { auth: true })
+}
+export function marginOpenApi({ code, shares, price, marginType }) {
+  return request('/api/orders/margin-open', {
+    method: 'POST', auth: true, body: { code, shares, price, marginType },
+  })
+}
+export function marginCoverApi({ positionId, price }) {
+  return request('/api/orders/margin-cover', {
+    method: 'POST', auth: true, body: { positionId, price },
+  })
+}
+export function marginSettleApi() {
+  return request('/api/orders/margin-settle', { method: 'POST', auth: true })
+}
