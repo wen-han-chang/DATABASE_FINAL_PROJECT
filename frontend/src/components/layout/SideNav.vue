@@ -26,7 +26,7 @@
         :key="item.path"
         :to="item.path"
         class="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors"
-        :class="$route.path === item.path
+        :class="isActive(item.path)
           ? 'bg-white/15 text-white'
           : 'text-slate-400 hover:bg-white/10 hover:text-white'"
       >
@@ -51,7 +51,7 @@
 
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { TrendingUp, LayoutDashboard, LogOut, Search, Wallet, Bot } from 'lucide-vue-next'
+import { TrendingUp, LayoutDashboard, LogOut, Search, Wallet, Bot, LineChart } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 
 const auth   = useAuthStore()
@@ -62,11 +62,16 @@ const navItems = [
   { path: '/',        label: '首頁總覽', icon: LayoutDashboard },
   { path: '/search',  label: '個股查詢', icon: Search },
   { path: '/trading', label: '下單練習', icon: Wallet },
-  { path: '/assistant', label: 'AI 助理', icon: Bot },
+  { path: '/assistant/chat', label: 'AI 聊天室', icon: Bot },
+  { path: '/assistant/advice', label: '股票建議', icon: LineChart },
 ]
 
 function handleLogout() {
   auth.logout()
   router.push('/login')
+}
+
+function isActive(path) {
+  return route.path === path
 }
 </script>

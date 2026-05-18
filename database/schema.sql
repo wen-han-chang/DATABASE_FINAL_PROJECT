@@ -25,11 +25,11 @@
      1. 開啟 SSMS，用 SQL Server 驗證登入（帳號 skyfire）。
      2. 確認上方資料庫已選到 ncu_db（或讓本腳本的 Section 0 自動建立並切換）。
      3. 直接整份貼上 → 按「執行 (F5)」。
-     4. 看訊息視窗最後的驗證結果（Section 5）確認 13 張核心表 + stock_sync 都建立成功。
+     4. 看訊息視窗最後的驗證結果（Section 5）確認核心表與延伸表都建立成功。
 
    如何驗證：
      腳本最後（Section 5）會自動列出所有資料表名稱與資料筆數，
-     正常應看到 13 張核心資料表 + stock_sync（共 14 列）、筆數皆為 0。
+     正常應看到核心資料表、同步表與 AI 延伸表都列在結果中；全新安裝時筆數多半為 0。
 
    常見錯誤與排除：
      - 「資料庫 'ncu_db' 不存在」：Section 0 會自動建立，若仍失敗代表登入
@@ -66,7 +66,7 @@ GO
    Section 1：⚠️【整庫重置區塊 — 預設停用】⚠️
    ----------------------------------------------------------------------------
    下面整段被 /* */ 包起來而停用。
-   只有在「要把 13 張核心表 + stock_sync 全部刪掉重建」且「已備份」時，才手動把這段的
+   只有在「要把所有資料表全部刪掉重建」且「已備份」時，才手動把這段的
    外層 /* 與 */ 拿掉再執行。DROP 順序刻意「先子表後父表」以免外鍵擋住。
    ============================================================================ */
 /*  ←←← 要重置時，刪掉這一行開頭的斜線星號
@@ -74,6 +74,9 @@ GO
 DROP TABLE IF EXISTS dbo.knowledge_related_tags;
 DROP TABLE IF EXISTS dbo.knowledge_sentences;
 DROP TABLE IF EXISTS dbo.knowledge_base;
+DROP TABLE IF EXISTS dbo.assistant_recommendation_items;
+DROP TABLE IF EXISTS dbo.assistant_recommendation_runs;
+DROP TABLE IF EXISTS dbo.watchlists;
 DROP TABLE IF EXISTS dbo.decision_card_tags;
 DROP TABLE IF EXISTS dbo.decision_cards;
 DROP TABLE IF EXISTS dbo.orders;
@@ -491,6 +494,93 @@ BEGIN
 END;
 GO
 
+/* ─────────────────────────────────────────────────────────────────────────
+   15. watchlists — 使用者自選清單
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.watchlists', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.watchlists (
+        id          BIGINT        IDENTITY(1,1) NOT NULL,
+        user_id     BIGINT        NOT NULL,
+        stock_id    SMALLINT      NOT NULL,
+        created_at  DATETIME2(0)  NOT NULL CONSTRAINT df_watchlists_created DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_watchlists PRIMARY KEY (id),
+        CONSTRAINT uq_watchlists_user_stock UNIQUE (user_id, stock_id),
+        CONSTRAINT fk_watchlists_user FOREIGN KEY (user_id)
+          REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_watchlists_stock FOREIGN KEY (stock_id)
+          REFERENCES dbo.stocks(id)
+    );
+END;
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   16. assistant_recommendation_runs — 股票建議快照
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.assistant_recommendation_runs', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_recommendation_runs (
+        id              BIGINT         IDENTITY(1,1) NOT NULL,
+        user_id         BIGINT         NOT NULL,
+        slot_date       DATE           NOT NULL,
+        slot_label      VARCHAR(10)    NOT NULL,      -- '0830' / '1350' / 'ondemand'
+        generated_at    DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_rec_runs_generated DEFAULT SYSDATETIME(),
+        summary_json    NVARCHAR(MAX)  NOT NULL,
+        CONSTRAINT pk_assistant_recommendation_runs PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_recommendation_runs UNIQUE (user_id, slot_date, slot_label),
+        CONSTRAINT fk_assistant_recommendation_runs_user FOREIGN KEY (user_id)
+          REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT chk_assistant_recommendation_runs_slot CHECK (slot_label IN ('0830', '1350', 'ondemand'))
+    );
+END;
+GO
+
+IF EXISTS (
+    SELECT 1
+    FROM sys.check_constraints
+    WHERE name = N'chk_assistant_recommendation_runs_slot'
+      AND parent_object_id = OBJECT_ID(N'dbo.assistant_recommendation_runs')
+)
+BEGIN
+    ALTER TABLE dbo.assistant_recommendation_runs
+      DROP CONSTRAINT chk_assistant_recommendation_runs_slot;
+END;
+GO
+
+ALTER TABLE dbo.assistant_recommendation_runs
+  ADD CONSTRAINT chk_assistant_recommendation_runs_slot
+  CHECK (slot_label IN ('0830', '1350', 'ondemand'));
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   17. assistant_recommendation_items — 單次建議快照中的個股建議
+   ───────────────────────────────────────────────────────────────────────── */
+IF OBJECT_ID(N'dbo.assistant_recommendation_items', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.assistant_recommendation_items (
+        id              BIGINT         IDENTITY(1,1) NOT NULL,
+        run_id          BIGINT         NOT NULL,
+        category        VARCHAR(20)    NOT NULL,      -- holding / watchlist
+        stock_code      VARCHAR(10)    NOT NULL,
+        stock_name      NVARCHAR(100)  NOT NULL,
+        action_code     VARCHAR(30)    NOT NULL,
+        action_label    NVARCHAR(30)   NOT NULL,
+        score           DECIMAL(8,4)   NULL,
+        price           DECIMAL(10,2)  NULL,
+        avg_cost        DECIMAL(10,4)  NULL,
+        shares          INT            NULL,
+        pnl             DECIMAL(15,2)  NULL,
+        pnl_pct         DECIMAL(10,4)  NULL,
+        reason          NVARCHAR(MAX)  NOT NULL,
+        snapshot_json   NVARCHAR(MAX)  NOT NULL,
+        CONSTRAINT pk_assistant_recommendation_items PRIMARY KEY (id),
+        CONSTRAINT fk_assistant_recommendation_items_run FOREIGN KEY (run_id)
+          REFERENCES dbo.assistant_recommendation_runs(id) ON DELETE CASCADE,
+        CONSTRAINT chk_assistant_recommendation_items_category CHECK (category IN ('holding', 'watchlist'))
+    );
+END;
+GO
+
 
 /* ============================================================================
    Section 3：額外索引（對應原 schema 的「重要索引建議」）
@@ -517,6 +607,15 @@ GO
 -- 股票名稱搜尋（code 已有 UNIQUE 自帶索引，不必重複建）
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_stock_name' AND object_id = OBJECT_ID(N'dbo.stocks'))
     CREATE INDEX idx_stock_name ON dbo.stocks (name);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_watchlists_user' AND object_id = OBJECT_ID(N'dbo.watchlists'))
+    CREATE INDEX idx_watchlists_user ON dbo.watchlists (user_id, created_at DESC);
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_assistant_rec_runs_user_time' AND object_id = OBJECT_ID(N'dbo.assistant_recommendation_runs'))
+    CREATE INDEX idx_assistant_rec_runs_user_time
+    ON dbo.assistant_recommendation_runs (user_id, slot_date DESC, slot_label DESC);
 GO
 
 
@@ -581,7 +680,7 @@ GO
 /* ============================================================================
    Section 5：驗證 — 列出所有資料表與目前筆數
    ----------------------------------------------------------------------------
-   執行後在「結果」視窗應看到 14 列（13 張核心表 + stock_sync）。
+   執行後在「結果」視窗應看到核心資料表、同步表與 AI 延伸表。
    全新安裝時 row_count 多半為 0；若已被使用過，stock_daily_bars / stock_sync
    可能已有真實資料，屬正常。
    ============================================================================ */
@@ -594,7 +693,9 @@ WHERE t.name IN (
     'users','investor_profiles','sectors','stocks','stock_daily_bars',
     'portfolios','holdings','orders','decision_cards','decision_card_tags',
     'knowledge_base','knowledge_sentences','knowledge_related_tags',
-    'stock_sync','assistant_etf_holdings','assistant_fundamentals'
+    'stock_sync','assistant_etf_holdings','assistant_fundamentals',
+    'assistant_stock_industries','assistant_topics','assistant_stock_topics',
+    'watchlists','assistant_recommendation_runs','assistant_recommendation_items'
 )
 GROUP BY t.name
 ORDER BY t.name;

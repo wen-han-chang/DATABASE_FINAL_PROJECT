@@ -21,7 +21,15 @@ const routes = [
   },
   {
     path: '/assistant',
+    component: () => import('@/views/AssistantHubView.vue'),
+  },
+  {
+    path: '/assistant/chat',
     component: () => import('@/views/AssistantView.vue'),
+  },
+  {
+    path: '/assistant/advice',
+    component: () => import('@/views/StockAdviceView.vue'),
   },
 ]
 

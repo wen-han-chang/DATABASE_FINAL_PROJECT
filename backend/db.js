@@ -188,6 +188,82 @@ async function ensureSchema(pool) {
           REFERENCES dbo.assistant_topics(topic_code) ON DELETE CASCADE
       );
     END;
+
+    IF OBJECT_ID(N'dbo.watchlists', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.watchlists (
+        id          BIGINT        IDENTITY(1,1) NOT NULL,
+        user_id     BIGINT        NOT NULL,
+        stock_id    SMALLINT      NOT NULL,
+        created_at  DATETIME2(0)  NOT NULL CONSTRAINT df_watchlists_created DEFAULT SYSDATETIME(),
+        CONSTRAINT pk_watchlists PRIMARY KEY (id),
+        CONSTRAINT uq_watchlists_user_stock UNIQUE (user_id, stock_id),
+        CONSTRAINT fk_watchlists_user FOREIGN KEY (user_id)
+          REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT fk_watchlists_stock FOREIGN KEY (stock_id)
+          REFERENCES dbo.stocks(id)
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_recommendation_runs', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_recommendation_runs (
+        id              BIGINT         IDENTITY(1,1) NOT NULL,
+        user_id         BIGINT         NOT NULL,
+        slot_date       DATE           NOT NULL,
+        slot_label      VARCHAR(10)    NOT NULL,
+        generated_at    DATETIME2(0)   NOT NULL CONSTRAINT df_assistant_rec_runs_generated DEFAULT SYSDATETIME(),
+        summary_json    NVARCHAR(MAX)  NOT NULL,
+        CONSTRAINT pk_assistant_recommendation_runs PRIMARY KEY (id),
+        CONSTRAINT uq_assistant_recommendation_runs UNIQUE (user_id, slot_date, slot_label),
+        CONSTRAINT fk_assistant_recommendation_runs_user FOREIGN KEY (user_id)
+          REFERENCES dbo.users(id) ON DELETE CASCADE,
+        CONSTRAINT chk_assistant_recommendation_runs_slot CHECK (slot_label IN ('0830', '1350', 'ondemand'))
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_recommendation_items', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.assistant_recommendation_items (
+        id              BIGINT         IDENTITY(1,1) NOT NULL,
+        run_id          BIGINT         NOT NULL,
+        category        VARCHAR(20)    NOT NULL,
+        stock_code      VARCHAR(10)    NOT NULL,
+        stock_name      NVARCHAR(100)  NOT NULL,
+        action_code     VARCHAR(30)    NOT NULL,
+        action_label    NVARCHAR(30)   NOT NULL,
+        score           DECIMAL(8,4)   NULL,
+        price           DECIMAL(10,2)  NULL,
+        avg_cost        DECIMAL(10,4)  NULL,
+        shares          INT            NULL,
+        pnl             DECIMAL(15,2)  NULL,
+        pnl_pct         DECIMAL(10,4)  NULL,
+        reason          NVARCHAR(MAX)  NOT NULL,
+        snapshot_json   NVARCHAR(MAX)  NOT NULL,
+        CONSTRAINT pk_assistant_recommendation_items PRIMARY KEY (id),
+        CONSTRAINT fk_assistant_recommendation_items_run FOREIGN KEY (run_id)
+          REFERENCES dbo.assistant_recommendation_runs(id) ON DELETE CASCADE,
+        CONSTRAINT chk_assistant_recommendation_items_category CHECK (category IN ('holding', 'watchlist'))
+      );
+    END;
+
+    IF OBJECT_ID(N'dbo.assistant_recommendation_runs', N'U') IS NOT NULL
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM sys.check_constraints
+        WHERE name = N'chk_assistant_recommendation_runs_slot'
+          AND parent_object_id = OBJECT_ID(N'dbo.assistant_recommendation_runs')
+      )
+      BEGIN
+        ALTER TABLE dbo.assistant_recommendation_runs
+          DROP CONSTRAINT chk_assistant_recommendation_runs_slot;
+      END;
+
+      ALTER TABLE dbo.assistant_recommendation_runs
+        ADD CONSTRAINT chk_assistant_recommendation_runs_slot
+        CHECK (slot_label IN ('0830', '1350', 'ondemand'));
+    END;
   `)
 }
 

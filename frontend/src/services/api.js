@@ -104,6 +104,23 @@ export function chatAssistantApi(message) {
   })
 }
 
+// ── 自選清單 / 股票建議 ─────────────────────────────────────
+export function getWatchlistApi() {
+  return request('/api/watchlist', { auth: true })
+}
+
+export function syncWatchlistApi(codes) {
+  return request('/api/watchlist/sync', {
+    method: 'POST',
+    auth: true,
+    body: { codes },
+  })
+}
+
+export function getLatestRecommendationApi() {
+  return request('/api/recommendations/latest', { auth: true })
+}
+
 // ── 槓桿 / 融資融券 ─────────────────────────────────────────
 export function getMarginPositionsApi() {
   return request('/api/portfolio/margin-positions', { auth: true })
