@@ -50,6 +50,7 @@ import {
 } from './dao.js'
 import { answerStockQuestion } from './assistant.js'
 import { buildAssistantScreeningDiagnostics } from './assistantData.js'
+import { analyzeTechnicalRules } from './technicalRules/index.js'
 import {
   generateOnDemandRecommendationForUser,
   getLatestRecommendation,
@@ -392,6 +393,27 @@ const server = http.createServer(async (req, res) => {
           code,
           count: result.bars.length,
           data: result.bars,
+        })
+      } catch (error) {
+        sendDaoError(res, error)
+      }
+      return
+    }
+
+    if (requestUrl.pathname.startsWith('/api/market/technical-rules/')) {
+      const code = decodeURIComponent(
+        requestUrl.pathname.replace('/api/market/technical-rules/', ''),
+      )
+      const refresh = requestUrl.searchParams.get('refresh') === '1'
+      try {
+        const result = await getStockBars(code, { refresh })
+        sendJson(res, 200, {
+          ok: true,
+          code,
+          source: result.source,
+          historyStatus: result.historyStatus,
+          count: result.bars.length,
+          data: analyzeTechnicalRules(result.bars),
         })
       } catch (error) {
         sendDaoError(res, error)

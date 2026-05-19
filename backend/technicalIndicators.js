@@ -152,6 +152,47 @@ export function calcMACD(closes) {
   }
 }
 
+function normalizeBars(bars) {
+  return Array.isArray(bars)
+    ? bars
+      .map((bar) => ({
+        ...bar,
+        open: Number(bar.open),
+        high: Number(bar.high),
+        low: Number(bar.low),
+        close: Number(bar.close),
+        volume: Number(bar.volume || 0),
+      }))
+      .filter((bar) => (
+        Number.isFinite(bar.open)
+        && Number.isFinite(bar.high)
+        && Number.isFinite(bar.low)
+        && Number.isFinite(bar.close)
+      ))
+    : []
+}
+
+export function buildTechnicalSeries(bars) {
+  const cleanBars = normalizeBars(bars)
+  const closes = cleanBars.map((bar) => bar.close)
+  const volumes = cleanBars.map((bar) => Number(bar.volume || 0))
+
+  return {
+    bars: cleanBars,
+    closes,
+    volumes,
+    ma5: calcMA(closes, 5),
+    ma20: calcMA(closes, 20),
+    ma60: calcMA(closes, 60),
+    kd: calcKD(cleanBars),
+    rsi14: calcRSI(closes),
+    macd: calcMACD(closes),
+    bollinger: calcBollinger(closes),
+    volumeMA5: calcMA(volumes, 5),
+    volumeMA20: calcMA(volumes, 20),
+  }
+}
+
 function lastDefined(values) {
   for (let index = values.length - 1; index >= 0; index--) {
     if (values[index] != null) return values[index]
@@ -215,33 +256,26 @@ function describeBollinger(latestClose, upper, middle, lower) {
 }
 
 export function summarizeTechnicalIndicators(bars) {
-  if (!Array.isArray(bars) || bars.length < 20) return null
+  const series = buildTechnicalSeries(bars)
+  if (series.bars.length < 20) return null
 
-  const closes = bars.map((bar) => bar.close)
-  const ma5Series = calcMA(closes, 5)
-  const ma20Series = calcMA(closes, 20)
-  const ma60Series = calcMA(closes, 60)
-  const kd = calcKD(bars)
-  const rsi = calcRSI(closes)
-  const macd = calcMACD(closes)
-  const bollinger = calcBollinger(closes)
-  const latest = bars[bars.length - 1]
+  const latest = series.bars[series.bars.length - 1]
 
-  const latestMa5 = lastDefined(ma5Series)
-  const latestMa20 = lastDefined(ma20Series)
-  const latestMa60 = lastDefined(ma60Series)
-  const latestK = lastDefined(kd.k)
-  const latestD = lastDefined(kd.d)
-  const previousK = previousDefined(kd.k)
-  const previousD = previousDefined(kd.d)
-  const latestRsi = lastDefined(rsi)
-  const latestDif = lastDefined(macd.dif)
-  const latestSignal = lastDefined(macd.signal)
-  const latestHist = lastDefined(macd.histogram)
-  const previousHist = previousDefined(macd.histogram)
-  const latestBbUpper = lastDefined(bollinger.upper)
-  const latestBbMid = lastDefined(bollinger.middle)
-  const latestBbLower = lastDefined(bollinger.lower)
+  const latestMa5 = lastDefined(series.ma5)
+  const latestMa20 = lastDefined(series.ma20)
+  const latestMa60 = lastDefined(series.ma60)
+  const latestK = lastDefined(series.kd.k)
+  const latestD = lastDefined(series.kd.d)
+  const previousK = previousDefined(series.kd.k)
+  const previousD = previousDefined(series.kd.d)
+  const latestRsi = lastDefined(series.rsi14)
+  const latestDif = lastDefined(series.macd.dif)
+  const latestSignal = lastDefined(series.macd.signal)
+  const latestHist = lastDefined(series.macd.histogram)
+  const previousHist = previousDefined(series.macd.histogram)
+  const latestBbUpper = lastDefined(series.bollinger.upper)
+  const latestBbMid = lastDefined(series.bollinger.middle)
+  const latestBbLower = lastDefined(series.bollinger.lower)
 
   return {
     asOfDate: latest.date,
@@ -273,6 +307,6 @@ export function summarizeTechnicalIndicators(bars) {
       lower: latestBbLower,
       signal: describeBollinger(latest.close, latestBbUpper, latestBbMid, latestBbLower),
     },
-    sampleSize: bars.length,
+    sampleSize: series.bars.length,
   }
 }
