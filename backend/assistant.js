@@ -157,6 +157,7 @@ function buildEvidence(context) {
       rsi: snapshot.technicals.rsi,
       macd: snapshot.technicals.macd,
       bollinger: snapshot.technicals.bollinger,
+      technicalRules: snapshot.technicalRules || null,
     }))
 
   const screeningEvidence = context.screening?.rankedCandidates?.map((candidate) => ({
@@ -222,6 +223,8 @@ export async function answerStockQuestion(message) {
       '你只能根據我提供的 context 做出任何和個股、ETF、價格、成分股、報酬或推薦有關的敘述。',
       '若 context.marketSnapshots[].technicals 有資料，請把它視為和圖表一致的技術分析依據；可以引用 MA、KD、RSI、MACD、Bollinger 的值與 signal。',
       '如果使用者問「怎麼看圖」、「技術面」、「目前走勢」、「KD」、「RSI」、「MACD」、「布林通道」、「均線」等問題，請優先使用 technicals 作答。',
+      '若 context.marketSnapshots[].technicalRules 有資料，請優先使用 technicalRules.signals 與 technicalRules.scoring 說明技術面；technicalRules 是後端 deterministic rule engine 的結果，可信度高於自行推測。',
+      '請不要自行發明 technicalRules.signals.patterns.detected 沒有出現的型態；若 technicalRules.available 為 false，請說明技術規則資料不足。',
       '若 context.screening 有資料，代表系統已根據可量化條件完成候選股排序。使用者要求前幾名或推薦時，請優先使用 context.screening.rankedCandidates，逐一用一般投資人聽得懂的語言說明入選原因。',
       '回答中不得提到 context、screening、rankedCandidates、rankingFactors、technicalScore、technicalReasons 這些程式或欄位名稱；請改說「本次依據」、「綜合評估」、「技術面」、「估值」、「殖利率」等自然語言。',
       '若排序同時使用 technical_strength、dividend_yield、low_pe、low_pb，請把它稱為「綜合評估」，不要說成純技術面排名。',
