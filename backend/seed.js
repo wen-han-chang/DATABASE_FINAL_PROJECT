@@ -1,4 +1,4 @@
-/**
+﻿/**
  * seed.js — 市場資料種子腳本（台灣前 50 大股票）
  *
  * 用途：
@@ -16,6 +16,8 @@
  * 如何執行：
  *   cd backend
  *   node seed.js            # 第一次灌入；若已有資料會跳過
+ *   node seed.js --sync-stocks
+ *                           # 非破壞性同步 TOP50 股票主檔，缺 K 線才補測試資料
  *   node seed.js --force    # 強制清掉這 3 張表重灌（見下方安全警告）
  *
  * ⚠️ --force 安全警告：
@@ -39,63 +41,65 @@ import { hashPassword } from './auth.js'
 // 1. 台灣前 50 檔（鏡像自 frontend/src/data/twStocks.js 的前 50 筆）
 //    欄位：code 代碼 / name 名稱 / price 測試起始價 / vol 波動係數 / sector 產業
 // ──────────────────────────────────────────────────────────────────────────
-const TOP50 = [
-  { code: '2330', name: '台積電',   price: 580,  vol: 0.020, sector: '半導體' },
-  { code: '2317', name: '鴻海',     price: 110,  vol: 0.022, sector: '電子製造' },
-  { code: '2454', name: '聯發科',   price: 820,  vol: 0.028, sector: '半導體' },
-  { code: '2882', name: '國泰金',   price: 52,   vol: 0.014, sector: '金融' },
-  { code: '2881', name: '富邦金',   price: 78,   vol: 0.015, sector: '金融' },
-  { code: '2412', name: '中華電',   price: 125,  vol: 0.010, sector: '電信' },
-  { code: '1301', name: '台塑',     price: 68,   vol: 0.016, sector: '石化' },
-  { code: '1303', name: '南亞',     price: 62,   vol: 0.016, sector: '石化' },
-  { code: '2002', name: '中鋼',     price: 26,   vol: 0.018, sector: '鋼鐵' },
-  { code: '2886', name: '兆豐金',   price: 38,   vol: 0.012, sector: '金融' },
-  { code: '2884', name: '玉山金',   price: 28,   vol: 0.013, sector: '金融' },
-  { code: '2891', name: '中信金',   price: 30,   vol: 0.013, sector: '金融' },
-  { code: '2303', name: '聯電',     price: 48,   vol: 0.024, sector: '半導體' },
-  { code: '3711', name: '日月光投控', price: 135, vol: 0.022, sector: '半導體封測' },
-  { code: '2308', name: '台達電',   price: 295,  vol: 0.023, sector: '電源供應器' },
-  { code: '2382', name: '廣達',     price: 280,  vol: 0.025, sector: '伺服器' },
-  { code: '3008', name: '大立光',   price: 1820, vol: 0.030, sector: '光學' },
-  { code: '2357', name: '華碩',     price: 385,  vol: 0.024, sector: '電腦' },
-  { code: '2353', name: '宏碁',     price: 38,   vol: 0.022, sector: '電腦' },
-  { code: '2395', name: '研華',     price: 310,  vol: 0.018, sector: '工業電腦' },
-  { code: '4938', name: '和碩',     price: 72,   vol: 0.022, sector: '電子製造' },
-  { code: '2379', name: '瑞昱',     price: 465,  vol: 0.026, sector: '半導體' },
-  { code: '2408', name: '南亞科',   price: 58,   vol: 0.028, sector: '記憶體' },
-  { code: '2376', name: '技嘉',     price: 155,  vol: 0.025, sector: '主機板' },
-  { code: '2474', name: '可成',     price: 178,  vol: 0.020, sector: '機殼' },
-  { code: '6505', name: '台塑化',   price: 88,   vol: 0.014, sector: '石化' },
-  { code: '2207', name: '和泰車',   price: 580,  vol: 0.015, sector: '汽車' },
-  { code: '2105', name: '正新',     price: 38,   vol: 0.016, sector: '橡膠' },
-  { code: '1216', name: '統一',     price: 72,   vol: 0.012, sector: '食品' },
-  { code: '2912', name: '統一超',   price: 272,  vol: 0.013, sector: '零售' },
-  { code: '2327', name: '國巨',     price: 520,  vol: 0.030, sector: '被動元件' },
-  { code: '2301', name: '光寶科',   price: 68,   vol: 0.020, sector: '電子' },
-  { code: '3045', name: '台灣大',   price: 105,  vol: 0.011, sector: '電信' },
-  { code: '4904', name: '遠傳',     price: 72,   vol: 0.011, sector: '電信' },
-  { code: '5880', name: '合庫金',   price: 26,   vol: 0.012, sector: '金融' },
-  { code: '2890', name: '永豐金',   price: 18,   vol: 0.014, sector: '金融' },
-  { code: '1326', name: '台化',     price: 60,   vol: 0.015, sector: '石化' },
-  { code: '2609', name: '陽明',     price: 42,   vol: 0.035, sector: '航運' },
-  { code: '2603', name: '長榮',     price: 138,  vol: 0.035, sector: '航運' },
-  { code: '2615', name: '萬海',     price: 48,   vol: 0.033, sector: '航運' },
-  { code: '2618', name: '長榮航',   price: 28,   vol: 0.028, sector: '航空' },
-  { code: '2610', name: '華航',     price: 18,   vol: 0.025, sector: '航空' },
-  { code: '0050', name: '元大台灣50', price: 145, vol: 0.013, sector: 'ETF' },
-  { code: '0056', name: '元大高股息', price: 38,  vol: 0.011, sector: 'ETF' },
-  { code: '00878', name: '國泰永續高股息', price: 22, vol: 0.011, sector: 'ETF' },
-  { code: '006208', name: '富邦台50', price: 88,  vol: 0.013, sector: 'ETF' },
-  { code: '2347', name: '聯強',     price: 58,   vol: 0.018, sector: '通路' },
-  { code: '3034', name: '聯詠',     price: 310,  vol: 0.028, sector: '半導體' },
-  { code: '6415', name: '矽力-KY', price: 1380, vol: 0.032, sector: '半導體' },
-  { code: '2356', name: '英業達',   price: 38,   vol: 0.020, sector: '伺服器' },
-]
-
-// ETF 代碼集合（影響 stocks.is_etf 與後續證交稅率 0.1%）
 const ETF_CODES = new Set(['0050', '0056', '00878', '006208'])
 
 // 每檔產生幾根日 K（與前端 getMockPrice 的 300 步一致）
+// Source: TAIFEX "Taiwan Stock Exchange Capitalization Weighted Stock Index Constituents and Weights".
+// https://www.taifex.com.tw/cht/9/futuresQADetail
+// Snapshot read on 2026-06-01. These are ranks 1-50 on the official page.
+const TOP50 = [
+  { code: '2330', name: '台積電', price: 2205, vol: 0.020, sector: '半導體' },
+  { code: '2454', name: '聯發科', price: 1280, vol: 0.028, sector: '半導體' },
+  { code: '2308', name: '台達電', price: 380, vol: 0.023, sector: '電子零組件' },
+  { code: '2317', name: '鴻海', price: 185, vol: 0.022, sector: '電子製造' },
+  { code: '3711', name: '日月光投控', price: 165, vol: 0.022, sector: '半導體封測' },
+  { code: '2383', name: '台光電', price: 520, vol: 0.030, sector: '電子零組件' },
+  { code: '2303', name: '聯電', price: 48, vol: 0.024, sector: '半導體' },
+  { code: '3037', name: '欣興', price: 160, vol: 0.028, sector: '電路板' },
+  { code: '2881', name: '富邦金', price: 88, vol: 0.015, sector: '金融' },
+  { code: '2327', name: '國巨', price: 650, vol: 0.030, sector: '被動元件' },
+  { code: '7769', name: '鴻勁', price: 900, vol: 0.035, sector: '半導體設備' },
+  { code: '2345', name: '智邦', price: 720, vol: 0.030, sector: '網通' },
+  { code: '2382', name: '廣達', price: 290, vol: 0.025, sector: '伺服器' },
+  { code: '2882', name: '國泰金', price: 68, vol: 0.014, sector: '金融' },
+  { code: '2891', name: '中信金', price: 40, vol: 0.013, sector: '金融' },
+  { code: '2408', name: '南亞科', price: 65, vol: 0.028, sector: '記憶體' },
+  { code: '2360', name: '致茂', price: 430, vol: 0.022, sector: '量測設備' },
+  { code: '2412', name: '中華電', price: 125, vol: 0.010, sector: '電信' },
+  { code: '3017', name: '奇鋐', price: 820, vol: 0.032, sector: '散熱' },
+  { code: '6669', name: '緯穎', price: 2500, vol: 0.035, sector: '伺服器' },
+  { code: '2885', name: '元大金', price: 36, vol: 0.012, sector: '金融' },
+  { code: '1303', name: '南亞', price: 45, vol: 0.016, sector: '塑化' },
+  { code: '2344', name: '華邦電', price: 25, vol: 0.026, sector: '記憶體' },
+  { code: '2368', name: '金像電', price: 250, vol: 0.030, sector: '電路板' },
+  { code: '3443', name: '創意', price: 1300, vol: 0.035, sector: 'IC設計' },
+  { code: '2886', name: '兆豐金', price: 42, vol: 0.012, sector: '金融' },
+  { code: '2887', name: '台新新光金', price: 18, vol: 0.014, sector: '金融' },
+  { code: '2357', name: '華碩', price: 620, vol: 0.024, sector: '電腦' },
+  { code: '4958', name: '臻鼎-KY', price: 130, vol: 0.024, sector: '電路板' },
+  { code: '8046', name: '南電', price: 200, vol: 0.028, sector: 'IC載板' },
+  { code: '2301', name: '光寶科', price: 110, vol: 0.020, sector: '電子' },
+  { code: '3653', name: '健策', price: 1100, vol: 0.030, sector: '散熱' },
+  { code: '3231', name: '緯創', price: 120, vol: 0.025, sector: '伺服器' },
+  { code: '2884', name: '玉山金', price: 30, vol: 0.013, sector: '金融' },
+  { code: '6505', name: '台塑化', price: 55, vol: 0.014, sector: '塑化' },
+  { code: '2059', name: '川湖', price: 1300, vol: 0.022, sector: '機構件' },
+  { code: '3008', name: '大立光', price: 2600, vol: 0.030, sector: '光學' },
+  { code: '2603', name: '長榮', price: 210, vol: 0.035, sector: '航運' },
+  { code: '2890', name: '永豐金', price: 28, vol: 0.014, sector: '金融' },
+  { code: '2395', name: '研華', price: 360, vol: 0.018, sector: '工業電腦' },
+  { code: '2880', name: '華南金', price: 28, vol: 0.012, sector: '金融' },
+  { code: '3045', name: '台灣大', price: 115, vol: 0.011, sector: '電信' },
+  { code: '1216', name: '統一', price: 85, vol: 0.012, sector: '食品' },
+  { code: '3481', name: '群創', price: 15, vol: 0.030, sector: '面板' },
+  { code: '3665', name: '貿聯-KY', price: 480, vol: 0.028, sector: '連接線材' },
+  { code: '2449', name: '京元電子', price: 120, vol: 0.026, sector: '半導體測試' },
+  { code: '2892', name: '第一金', price: 30, vol: 0.012, sector: '金融' },
+  { code: '3189', name: '景碩', price: 110, vol: 0.026, sector: 'IC載板' },
+  { code: '2883', name: '凱基金', price: 18, vol: 0.014, sector: '金融' },
+  { code: '6770', name: '力積電', price: 25, vol: 0.030, sector: '半導體' },
+]
+
 const BARS_PER_STOCK = 300
 
 // 測試 K 線的「結束日」= 今天；往回推 BARS_PER_STOCK 個交易日（跳週末）
@@ -204,6 +208,7 @@ function buildTradeDates() {
 // ──────────────────────────────────────────────────────────────────────────
 async function main() {
   const force = process.argv.includes('--force')
+  const syncStocks = process.argv.includes('--sync-stocks')
   const pool = await getPool()
 
   // 3-0. 示範帳號（讓前端 Login.vue 的示範帳號 demo@invest.ai/demo123 可用）
@@ -223,6 +228,11 @@ async function main() {
     console.log('[seed] 已建立示範帳號 demo@invest.ai / demo123')
   } else {
     console.log('[seed] 示範帳號已存在，略過')
+  }
+
+  if (syncStocks) {
+    await syncTop50Stocks(pool)
+    return
   }
 
   // 3-1. 檢查是否已灌過
@@ -310,6 +320,86 @@ async function main() {
   console.log('[seed] 完成，目前筆數：', verify.recordset[0])
 }
 
+async function syncTop50Stocks(pool) {
+  const tradeDates = buildTradeDates()
+  let stockUpserts = 0
+  let barInserts = 0
+
+  await withTransaction(async (tx) => {
+    for (const s of TOP50) {
+      const r = new sql.Request(tx)
+      const out = await r
+        .input('sector', sql.NVarChar(50), s.sector)
+        .input('code', sql.VarChar(10), s.code)
+        .input('name', sql.NVarChar(50), s.name)
+        .input('base_price', sql.Decimal(10, 2), s.price)
+        .input('volatility', sql.Decimal(6, 4), s.vol)
+        .input('is_etf', sql.Bit, ETF_CODES.has(s.code) ? 1 : 0)
+        .query(`
+          DECLARE @sectorId smallint;
+
+          SELECT @sectorId = id
+            FROM dbo.sectors
+           WHERE name = @sector;
+
+          IF @sectorId IS NULL
+          BEGIN
+            INSERT INTO dbo.sectors (name) VALUES (@sector);
+            SET @sectorId = CONVERT(smallint, SCOPE_IDENTITY());
+          END;
+
+          IF EXISTS (SELECT 1 FROM dbo.stocks WHERE code = @code)
+          BEGIN
+            UPDATE dbo.stocks
+               SET name = @name,
+                   sector_id = @sectorId,
+                   base_price = @base_price,
+                   volatility = @volatility,
+                   is_etf = @is_etf,
+                   is_active = 1
+             WHERE code = @code;
+          END
+          ELSE
+          BEGIN
+            INSERT INTO dbo.stocks
+              (code, name, sector_id, base_price, volatility, is_etf, is_active)
+            VALUES
+              (@code, @name, @sectorId, @base_price, @volatility, @is_etf, 1);
+          END;
+
+          SELECT id FROM dbo.stocks WHERE code = @code;
+        `)
+
+      const stockId = out.recordset[0].id
+      stockUpserts++
+
+      const barCheck = await new sql.Request(tx)
+        .input('stock_id', sql.SmallInt, stockId)
+        .query('SELECT COUNT(*) AS n FROM dbo.stock_daily_bars WHERE stock_id = @stock_id')
+
+      if (barCheck.recordset[0].n > 0) continue
+
+      const bars = generateDailyBars(s, tradeDates)
+      for (const b of bars) {
+        await new sql.Request(tx)
+          .input('stock_id', sql.SmallInt, stockId)
+          .input('trade_date', sql.Date, b.trade_date)
+          .input('open', sql.Decimal(10, 2), b.open)
+          .input('high', sql.Decimal(10, 2), b.high)
+          .input('low', sql.Decimal(10, 2), b.low)
+          .input('close', sql.Decimal(10, 2), b.close)
+          .input('volume', sql.BigInt, b.volume)
+          .query(`INSERT INTO dbo.stock_daily_bars
+                    (stock_id, trade_date, [open], high, low, [close], volume)
+                  VALUES (@stock_id, @trade_date, @open, @high, @low, @close, @volume)`)
+        barInserts++
+      }
+    }
+  })
+
+  console.log(`[seed] --sync-stocks：同步股票主檔 ${stockUpserts} 筆，補入 K 線 ${barInserts} 筆`)
+}
+
 main()
   .catch((err) => {
     console.error('[seed] 失敗：', err.message)
@@ -318,3 +408,4 @@ main()
   .finally(async () => {
     await closePool()
   })
+

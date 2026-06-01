@@ -677,6 +677,40 @@ export async function syncWatchlist(userId, codes = []) {
   return getWatchlist(userId)
 }
 
+export async function searchDbStocks(q = '', { limit = 20 } = {}) {
+  const keyword = String(q || '').trim()
+  const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 50)
+  const like = `%${keyword}%`
+
+  return query(
+    `SELECT TOP (${safeLimit})
+            s.code,
+            s.name,
+            sec.name AS sector,
+            CAST(s.base_price AS float) AS price,
+            CAST(s.volatility AS float) AS vol,
+            s.is_etf AS isEtf
+     FROM dbo.stocks s
+     JOIN dbo.sectors sec ON sec.id = s.sector_id
+     WHERE s.is_active = 1
+       AND (
+         @q = ''
+         OR s.code LIKE @like
+         OR s.name LIKE @like
+         OR sec.name LIKE @like
+       )
+     ORDER BY
+       CASE
+         WHEN s.code = @q THEN 0
+         WHEN s.code LIKE @q + '%' THEN 1
+         WHEN s.name LIKE @q + '%' THEN 2
+         ELSE 3
+       END,
+       s.code ASC`,
+    { q: keyword, like },
+  )
+}
+
 // 交易共用：在交易內抓 portfolio 與 stock，缺一不可
 async function loadPortfolioAndStock(tx, userId, code) {
   const pRes = await new sql.Request(tx)

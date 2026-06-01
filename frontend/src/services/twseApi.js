@@ -91,6 +91,13 @@ export function getMappedStocks() {
   return requestJson('/api/market/stocks')
 }
 
+export function searchDbStocks(q, query = {}) {
+  return requestJson('/api/stocks/search', {
+    q,
+    ...query,
+  })
+}
+
 /**
  * 讀取單一股票資料。
  */
