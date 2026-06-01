@@ -42,7 +42,62 @@
                     ? 'bg-amber-50/70 border-amber-100'
                     : 'bg-slate-50 border-slate-100'"
                 >
-                  <template v-if="item.kind === 'technical'">
+                  <template v-if="item.kind === 'stock_analysis'">
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3">
+                      <span class="font-semibold text-sm">{{ item.code }} {{ item.name }}</span>
+                      <span class="text-brand-muted">{{ item.asOfDate }}</span>
+                      <span class="text-brand-muted">收盤 {{ formatValue(item.close) }}</span>
+                      <span v-if="item.fundamentals?.priceAdjusted" class="text-blue-600 font-semibold">
+                        已用最新價校正
+                      </span>
+                    </div>
+                    <div class="grid sm:grid-cols-4 gap-2 mb-3">
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">殖利率</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.fundamentals?.dividendYield) }}%</span>
+                      </div>
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">PE</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.fundamentals?.peRatio) }}</span>
+                      </div>
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">PB</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.fundamentals?.pbRatio) }}</span>
+                      </div>
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">技術分</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.technical?.technicalRules?.scoring?.totalScore) }}</span>
+                      </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                      <span :class="badgeClass(item.technical?.movingAverages?.structure)">
+                        MA {{ item.technical?.movingAverages?.structure || '資料不足' }}
+                      </span>
+                      <span :class="badgeClass(item.technical?.kd?.signal)">
+                        KD {{ item.technical?.kd?.signal || '資料不足' }}
+                      </span>
+                      <span :class="badgeClass(item.technical?.rsi?.signal)">
+                        RSI14 {{ formatValue(item.technical?.rsi?.rsi14) }} · {{ item.technical?.rsi?.signal || '資料不足' }}
+                      </span>
+                      <span :class="badgeClass(item.technical?.macd?.signal)">
+                        MACD {{ item.technical?.macd?.signal || '資料不足' }}
+                      </span>
+                      <span :class="badgeClass(item.technical?.bollinger?.signal)">
+                        BB {{ item.technical?.bollinger?.signal || '資料不足' }}
+                      </span>
+                    </div>
+                    <p v-if="item.fundamentals?.priceAdjusted" class="text-brand-muted mt-2">
+                      基準價 {{ formatValue(item.fundamentals?.rawClosePrice) }}，校正價 {{ formatValue(item.fundamentals?.valuationPrice) }}
+                    </p>
+                    <p
+                      v-if="valuationUnavailableReason(item.fundamentals, 'peRatio')"
+                      class="text-orange-700 mt-2"
+                    >
+                      PE：{{ valuationUnavailableReason(item.fundamentals, 'peRatio') }}
+                    </p>
+                  </template>
+
+                  <template v-else-if="item.kind === 'technical'">
                     <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3">
                       <span class="font-semibold text-sm">{{ item.code }}</span>
                       <span class="text-brand-muted">{{ item.asOfDate }}</span>
@@ -67,6 +122,39 @@
                     </div>
                   </template>
 
+                  <template v-else-if="item.kind === 'fundamentals'">
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3">
+                      <span class="font-semibold text-sm">{{ item.code }} {{ item.name }}</span>
+                      <span class="text-brand-muted">{{ item.tradeDate }}</span>
+                      <span v-if="item.priceAdjusted" class="text-blue-600 font-semibold">
+                        已用最新價校正
+                      </span>
+                    </div>
+                    <div class="grid sm:grid-cols-3 gap-2 mb-2">
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">殖利率</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.dividendYield) }}%</span>
+                      </div>
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">PE</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.peRatio) }}</span>
+                      </div>
+                      <div class="rounded-lg bg-white/80 px-2 py-1">
+                        <span class="text-brand-muted">PB</span>
+                        <span class="ml-1 font-semibold">{{ formatValue(item.pbRatio) }}</span>
+                      </div>
+                    </div>
+                    <p v-if="item.priceAdjusted" class="text-brand-muted">
+                      基準價 {{ formatValue(item.rawClosePrice) }}，校正價 {{ formatValue(item.valuationPrice) }}
+                    </p>
+                    <p
+                      v-if="valuationUnavailableReason(item, 'peRatio')"
+                      class="text-orange-700 mt-2"
+                    >
+                      PE：{{ valuationUnavailableReason(item, 'peRatio') }}
+                    </p>
+                  </template>
+
                   <template v-else>
                     <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
                       <div class="flex flex-wrap items-center gap-2">
@@ -74,9 +162,27 @@
                           {{ item.rank }}
                         </span>
                         <span class="font-semibold text-sm">{{ item.code }} {{ item.name }}</span>
+                        <span
+                          v-if="item.universeLabel"
+                          class="inline-flex items-center rounded-full bg-white text-amber-700 border border-amber-100 px-2.5 py-1"
+                        >
+                          範圍：{{ item.universeLabel }}
+                        </span>
                       </div>
                       <span class="text-amber-700 font-semibold">{{ scoreLabel(item) }} {{ formatValue(item.score) }}</span>
                     </div>
+                    <p
+                      v-if="item.dataBasis && item.rank === 1"
+                      class="text-brand-muted mb-2"
+                    >
+                      資料：{{ item.dataBasis.price }}；{{ item.dataBasis.fundamentals }}；{{ item.dataBasis.technicals }}
+                    </p>
+                    <p
+                      v-if="item.industryConcentration?.hasConcentration && item.rank === 1"
+                      class="rounded-lg bg-orange-100/70 text-orange-800 border border-orange-200 px-2 py-1 mb-2"
+                    >
+                      產業集中提示：{{ industryConcentrationLabel(item) }}
+                    </p>
                     <div class="grid sm:grid-cols-3 gap-2 mb-2">
                       <div
                         v-if="showEtfWeight(item)"
@@ -103,6 +209,20 @@
                       </div>
                     </div>
                     <div
+                      v-if="factorBreakdownItems(item).length"
+                      class="grid sm:grid-cols-4 gap-2 mb-2"
+                    >
+                      <div
+                        v-for="factor in factorBreakdownItems(item)"
+                        :key="factor.factor"
+                        class="rounded-lg bg-white/80 px-2 py-1"
+                      >
+                        <span class="text-brand-muted">{{ factor.label }}</span>
+                        <span class="ml-1 font-semibold">{{ factor.rankLabel }}</span>
+                        <span class="ml-1 text-brand-muted">{{ factor.valueLabel }}</span>
+                      </div>
+                    </div>
+                    <div
                       v-if="item.industry || item.topics?.length"
                       class="flex flex-wrap gap-2 mb-2"
                     >
@@ -120,6 +240,12 @@
                         題材：{{ topic.name }}
                       </span>
                     </div>
+                    <p
+                      v-if="valuationUnavailableReason(item.fundamentals, 'peRatio')"
+                      class="text-orange-700 mb-2"
+                    >
+                      PE：{{ valuationUnavailableReason(item.fundamentals, 'peRatio') }}
+                    </p>
                     <div class="flex flex-wrap gap-2">
                       <span
                         v-for="factor in rankingLabels(item)"
@@ -195,9 +321,10 @@ function formatValue(value) {
 }
 
 function evidenceKey(item) {
-  return item.kind === 'screening'
-    ? `screening-${item.rank}-${item.code}`
-    : `technical-${item.code}-${item.asOfDate}`
+  if (item.kind === 'screening') return `screening-${item.rank}-${item.code}`
+  if (item.kind === 'stock_analysis') return `stock-analysis-${item.code}-${item.asOfDate}`
+  if (item.kind === 'fundamentals') return `fundamentals-${item.code}-${item.tradeDate}`
+  return `technical-${item.code}-${item.asOfDate}`
 }
 
 function badgeClass(signal) {
@@ -241,6 +368,11 @@ function showValuation(item) {
   return item.fundamentals?.peRatio != null || item.fundamentals?.pbRatio != null
 }
 
+function valuationUnavailableReason(fundamentals, field) {
+  const detail = fundamentals?.valuationAvailability?.[field]
+  return detail && detail.available === false ? detail.reason : ''
+}
+
 function rankingLabels(item) {
   const factors = item.rankingFactors || []
   const isComposite = ['technical_strength', 'dividend_yield', 'low_pe', 'low_pb']
@@ -251,6 +383,32 @@ function rankingLabels(item) {
 
 function scoreLabel(item) {
   return rankingLabels(item).includes('綜合評估') ? '綜合分數' : '分數'
+}
+
+function factorValueLabel(factor, value, available = true) {
+  if (!available) return '資料不足'
+  if (value == null) return ''
+  if (factor === 'dividend_yield' || factor === 'etf_weight') return `${value}%`
+  if (factor === 'technical_strength') return `分數 ${value}`
+  return value
+}
+
+function factorBreakdownItems(item) {
+  const breakdown = item.factorBreakdown || {}
+  return Object.entries(breakdown).map(([factor, detail]) => ({
+    factor,
+    label: rankingFactorLabel(factor),
+    rank: detail.rank,
+    total: detail.total,
+    rankLabel: detail.rank ? `#${detail.rank}${detail.total ? `/${detail.total}` : ''}` : '—',
+    valueLabel: factorValueLabel(factor, detail.value, detail.available !== false),
+  }))
+}
+
+function industryConcentrationLabel(item) {
+  const groups = item.industryConcentration?.groups || []
+  if (!groups.length) return '推薦名單中有多檔屬於相同產業，需留意同產業風險。'
+  return groups.map((group) => `${group.industry} ${group.count} 檔`).join('、')
 }
 
 async function scrollToBottom() {

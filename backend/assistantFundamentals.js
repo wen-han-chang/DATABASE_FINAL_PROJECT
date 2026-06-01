@@ -2,6 +2,33 @@ import { query, withTransaction, sql } from './db.js'
 
 const BWIBBU_URL = 'https://www.twse.com.tw/exchangeReport/BWIBBU_d'
 const CACHE_HOURS = 12
+const DAILY_DATA_EXPECTED_AFTER_HOUR = 14
+
+function taipeiParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(date)
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]))
+}
+
+function taipeiDateText(date = new Date()) {
+  const parts = taipeiParts(date)
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+function shouldExpectTodayDailyData(date = new Date()) {
+  const parts = taipeiParts(date)
+  const weekday = parts.weekday
+  const hour = Number(parts.hour)
+  const isWeekday = weekday !== 'Sat' && weekday !== 'Sun'
+  return isWeekday && hour >= DAILY_DATA_EXPECTED_AFTER_HOUR
+}
 
 function toNumber(value) {
   const text = String(value ?? '').replace(/,/g, '').trim()
@@ -78,6 +105,8 @@ async function fetchLatestFundamentals() {
 
 async function readLatestFundamentals(codes = []) {
   const filterCodes = [...new Set(codes.map((code) => String(code || '').trim()).filter(Boolean))]
+  if (!filterCodes.length) return []
+
   const codeFilter = filterCodes.length
     ? `AND stock_code IN (${filterCodes.map((_, index) => `@c${index}`).join(', ')})`
     : ''
@@ -112,7 +141,10 @@ function fundamentalsAreFresh(rows) {
   const fetchedAt = rows[0].fetchedAt instanceof Date
     ? rows[0].fetchedAt
     : new Date(rows[0].fetchedAt)
-  return Date.now() - fetchedAt.getTime() < CACHE_HOURS * 60 * 60 * 1000
+  const fetchedRecently = Date.now() - fetchedAt.getTime() < CACHE_HOURS * 60 * 60 * 1000
+  if (!fetchedRecently) return false
+  if (!shouldExpectTodayDailyData()) return true
+  return rows[0].tradeDate === taipeiDateText()
 }
 
 async function saveFundamentals(rows) {
@@ -161,13 +193,16 @@ async function saveFundamentals(rows) {
 }
 
 export async function getLatestFundamentals(codes = []) {
-  const cached = await readLatestFundamentals(codes)
+  const filterCodes = [...new Set(codes.map((code) => String(code || '').trim()).filter(Boolean))]
+  if (!filterCodes.length) return []
+
+  const cached = await readLatestFundamentals(filterCodes)
   if (fundamentalsAreFresh(cached)) return cached
 
   const freshRows = await fetchLatestFundamentals()
   if (freshRows.length) {
     await saveFundamentals(freshRows)
-    return readLatestFundamentals(codes)
+    return readLatestFundamentals(filterCodes)
   }
 
   return cached
