@@ -43,6 +43,34 @@ const fullHistoryJobs = new Set()
 const quickHistoryCache = new Map()
 const historyErrorCache = new Map()
 const REAL_HISTORY_SOURCES = new Set(['twse', 'finmind'])
+const DAILY_DATA_EXPECTED_AFTER_HOUR = 14
+
+function taipeiParts(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Taipei',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(date)
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]))
+}
+
+function taipeiDateText(date = new Date()) {
+  const parts = taipeiParts(date)
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+function shouldExpectTodayDailyData(date = new Date()) {
+  const parts = taipeiParts(date)
+  const weekday = parts.weekday
+  const hour = Number(parts.hour)
+  const isWeekday = weekday !== 'Sat' && weekday !== 'Sun'
+  return isWeekday && hour >= DAILY_DATA_EXPECTED_AFTER_HOUR
+}
 
 // 手續費 0.1425%；整張最低 20 元，零股最低 1 元
 function calcFee(faceAmount, isOddLot = false) {
@@ -106,16 +134,15 @@ async function findStockIdByCode(code) {
   return sRows[0]?.id ?? null
 }
 
-function toDateText(value) {
-  if (!value) return null
-  return new Date(value).toISOString().slice(0, 10)
-}
-
 async function readStockSync(stockId) {
   const syncRows = await query(
     `SELECT source,
-            CONVERT(date, last_synced) AS synced_date
-     FROM dbo.stock_sync WHERE stock_id = @sid`,
+            CONVERT(varchar(10), last_synced, 23) AS syncedDate,
+            CONVERT(varchar(10), MAX(b.trade_date), 23) AS latestTradeDate
+     FROM dbo.stock_sync ss
+     LEFT JOIN dbo.stock_daily_bars b ON b.stock_id = ss.stock_id
+     WHERE ss.stock_id = @sid
+     GROUP BY ss.source, ss.last_synced`,
     { sid: stockId },
   )
   return syncRows[0] ?? null
@@ -126,8 +153,11 @@ function isRealHistorySource(source) {
 }
 
 function isFreshFullSync(sync) {
-  const todayStr = new Date().toISOString().slice(0, 10)
-  return isRealHistorySource(sync?.source) && toDateText(sync.synced_date) === todayStr
+  if (!isRealHistorySource(sync?.source)) return false
+  const todayStr = taipeiDateText()
+  if (sync.syncedDate !== todayStr) return false
+  if (!shouldExpectTodayDailyData()) return true
+  return sync.latestTradeDate === todayStr
 }
 
 async function replaceBarsWithHistory(stockId, bars, source) {

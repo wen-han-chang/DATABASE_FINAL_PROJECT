@@ -20,6 +20,7 @@ const HOLDING_CACHE_HOURS = 12
 const MAX_MARKET_CONTEXT_CODES = 12
 const SCREENING_CONCURRENCY = 4
 const MIN_RANKING_TECHNICAL_BARS = 120
+const DEFAULT_RECOMMENDATION_ETF_CODE = '0050'
 
 function toIsoDate(raw) {
   const match = String(raw || '').match(/(\d{4})[/-]?(\d{2})[/-]?(\d{2})/)
@@ -393,6 +394,108 @@ function summarizeBars(bars) {
   }
 }
 
+function finiteNumber(value) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : null
+}
+
+function positiveNumber(value) {
+  const number = finiteNumber(value)
+  return number != null && number > 0 ? number : null
+}
+
+function roundNumber(value, digits = 4) {
+  const number = finiteNumber(value)
+  return number == null ? null : +number.toFixed(digits)
+}
+
+function valuationAvailability({ dividendYield, peRatio, pbRatio }) {
+  return {
+    dividendYield: {
+      available: dividendYield != null,
+      reason: dividendYield == null
+        ? 'TWSE BWIBBU_d 未提供有效殖利率，系統不自行推估股利。'
+        : null,
+    },
+    peRatio: {
+      available: peRatio != null,
+      reason: peRatio == null
+        ? 'TWSE BWIBBU_d 未提供有效本益比，常見原因是 EPS 為 0 或負值，或官方當日未提供該欄位；目前系統未接 EPS/季報資料源，因此不自行重算。'
+        : null,
+    },
+    pbRatio: {
+      available: pbRatio != null,
+      reason: pbRatio == null
+        ? 'TWSE BWIBBU_d 未提供有效股價淨值比，系統不自行推估每股淨值。'
+        : null,
+    },
+  }
+}
+
+function snapshotValuationPrice(snapshot) {
+  const quotePrice = finiteNumber(snapshot?.quote?.price)
+  if (quotePrice != null && quotePrice > 0) {
+    return {
+      price: quotePrice,
+      source: 'TWSE MIS quote',
+      date: snapshot?.quote?.date || null,
+      time: snapshot?.quote?.time || null,
+    }
+  }
+
+  const latestClose = finiteNumber(snapshot?.bars?.latestClose)
+  if (latestClose != null && latestClose > 0) {
+    return {
+      price: latestClose,
+      source: 'latest daily bar',
+      date: snapshot?.bars?.latestDate || null,
+      time: null,
+    }
+  }
+
+  return null
+}
+
+function adjustFundamentalsForPrice(fundamentals, snapshot) {
+  if (!fundamentals) return null
+
+  const referenceClose = finiteNumber(fundamentals.closePrice)
+  const valuationPrice = snapshotValuationPrice(snapshot)
+  const dividendYield = finiteNumber(fundamentals.dividendYield)
+  const sourcePeRatio = finiteNumber(fundamentals.peRatio)
+  const sourcePbRatio = finiteNumber(fundamentals.pbRatio)
+  const peRatio = positiveNumber(fundamentals.peRatio)
+  const pbRatio = positiveNumber(fundamentals.pbRatio)
+  const sanitized = {
+    ...fundamentals,
+    peRatio,
+    pbRatio,
+    valuationAvailability: valuationAvailability({ dividendYield, peRatio, pbRatio }),
+  }
+
+  if (!referenceClose || !valuationPrice?.price) {
+    return { ...sanitized, priceAdjusted: false }
+  }
+
+  const priceRatio = valuationPrice.price / referenceClose
+
+  return {
+    ...sanitized,
+    rawClosePrice: referenceClose,
+    rawDividendYield: dividendYield,
+    rawPeRatio: sourcePeRatio,
+    rawPbRatio: sourcePbRatio,
+    dividendYield: dividendYield == null ? null : roundNumber(dividendYield / priceRatio, 4),
+    peRatio: peRatio == null ? null : roundNumber(peRatio * priceRatio, 4),
+    pbRatio: pbRatio == null ? null : roundNumber(pbRatio * priceRatio, 4),
+    valuationPrice: valuationPrice.price,
+    valuationPriceSource: valuationPrice.source,
+    valuationPriceDate: valuationPrice.date,
+    valuationPriceTime: valuationPrice.time,
+    priceAdjusted: true,
+  }
+}
+
 function hasRequiredTechnicalDepth(bars, minBars = 20) {
   return bars.length >= minBars && summarizeTechnicalIndicators(bars) != null
 }
@@ -528,7 +631,12 @@ function rankValues(candidates, getter, direction = 'desc') {
   const size = valid.length
   const scores = new Map()
   valid.forEach((item, index) => {
-    scores.set(item.candidate.code, size <= 1 ? 1 : 1 - (index / (size - 1)))
+    scores.set(item.candidate.code, {
+      rank: index + 1,
+      total: size,
+      value: Number(item.value),
+      score: size <= 1 ? 1 : 1 - (index / (size - 1)),
+    })
   })
   return scores
 }
@@ -578,40 +686,116 @@ function matchesTopics(candidate, filters) {
   return filters.every((filter) => topicCodes.has(filter))
 }
 
-function rankScreeningCandidates(candidates, factors, targetCount = 5) {
+function industryKey(candidate) {
+  return candidate.industry || candidate.sector || '未分類'
+}
+
+function diversifyByIndustry(candidates, targetCount, maxPerIndustry = 2) {
+  const selected = []
+  const selectedCodes = new Set()
+  const industryCounts = new Map()
+
+  for (const candidate of candidates) {
+    const key = industryKey(candidate)
+    const count = industryCounts.get(key) || 0
+    if (count >= maxPerIndustry) continue
+    selected.push(candidate)
+    selectedCodes.add(candidate.code)
+    industryCounts.set(key, count + 1)
+    if (selected.length >= targetCount) return selected
+  }
+
+  for (const candidate of candidates) {
+    if (selectedCodes.has(candidate.code)) continue
+    selected.push(candidate)
+    if (selected.length >= targetCount) return selected
+  }
+
+  return selected
+}
+
+function summarizeIndustryConcentration(candidates) {
+  const counts = new Map()
+  for (const candidate of candidates) {
+    const key = industryKey(candidate)
+    counts.set(key, (counts.get(key) || 0) + 1)
+  }
+
+  const groups = [...counts.entries()]
+    .map(([industry, count]) => ({ industry, count }))
+    .filter((item) => item.count > 1)
+    .sort((a, b) => b.count - a.count)
+
+  return {
+    hasConcentration: groups.length > 0,
+    groups,
+  }
+}
+
+function screeningUniverseLabel(universeType, etfCodes = []) {
+  if (universeType === 'etf_holdings' && etfCodes.length) {
+    return etfCodes.length === 1 ? `${etfCodes[0]} 成分股` : `${etfCodes.join('、')} 成分股`
+  }
+  if (universeType === 'topic_memberships') return '題材股票池'
+  return '候選股票池'
+}
+
+function rankScreeningCandidates(candidates, factors, targetCount = 5, options = {}) {
   const rankingFactors = normalizeRankingFactors(factors)
   const factorWeights = rankingFactorWeights(rankingFactors)
   const factorScores = {
     technical_strength: rankValues(candidates, (item) => item.technicalScore, 'desc'),
     dividend_yield: rankValues(candidates, (item) => item.fundamentals?.dividendYield, 'desc'),
-    low_pe: rankValues(candidates, (item) => item.fundamentals?.peRatio, 'asc'),
-    low_pb: rankValues(candidates, (item) => item.fundamentals?.pbRatio, 'asc'),
+    low_pe: rankValues(candidates, (item) => positiveNumber(item.fundamentals?.peRatio), 'asc'),
+    low_pb: rankValues(candidates, (item) => positiveNumber(item.fundamentals?.pbRatio), 'asc'),
     etf_weight: rankValues(candidates, (item) => item.weight, 'desc'),
   }
 
-  return candidates
+  const rankedCandidates = candidates
     .map((candidate) => {
-      const availableScores = rankingFactors
-        .map((factor) => ({
-          factor,
-          score: factorScores[factor].get(candidate.code),
-          weight: factorWeights[factor],
-        }))
-        .filter((item) => item.score != null)
-      const totalWeight = availableScores.reduce((sum, item) => sum + item.weight, 0)
+      const factorDetails = rankingFactors
+        .map((factor) => {
+          const detail = factorScores[factor].get(candidate.code)
+          return {
+            factor,
+            available: Boolean(detail),
+            score: detail?.score ?? 0,
+            rank: detail?.rank,
+            total: detail?.total,
+            value: detail?.value,
+            weight: factorWeights[factor],
+          }
+        })
+      const totalWeight = factorDetails.reduce((sum, item) => sum + item.weight, 0)
       const score = totalWeight
-        ? availableScores.reduce((sum, item) => sum + (item.score * item.weight), 0) / totalWeight
+        ? factorDetails.reduce((sum, item) => sum + (item.score * item.weight), 0) / totalWeight
         : null
+      const factorBreakdown = Object.fromEntries(
+        factorDetails.map((item) => [item.factor, {
+          available: item.available,
+          rank: item.rank,
+          total: item.total,
+          value: item.value,
+          score: +item.score.toFixed(4),
+          weight: item.weight,
+        }]),
+      )
       return {
         ...candidate,
         rankingFactors,
         rankingFactorWeights: factorWeights,
+        factorBreakdown,
         score: score == null ? null : +score.toFixed(4),
       }
     })
     .filter((candidate) => candidate.score != null)
     .sort((a, b) => b.score - a.score)
-    .slice(0, targetCount)
+
+  const selectedCandidates = options.diversifyIndustry
+    ? diversifyByIndustry(rankedCandidates, targetCount, options.industryLimit || 2)
+    : rankedCandidates.slice(0, targetCount)
+
+  return selectedCandidates
     .map((candidate, index) => ({
       ...candidate,
       rank: index + 1,
@@ -668,7 +852,7 @@ async function buildScreeningContext(plan, holdingsByEtf) {
   const baseCandidates = universeRows.map((holding) => ({
     code: holding.stockCode,
     name: holding.stockName,
-    weight: Number(holding.weight),
+    weight: holding.weight == null ? null : Number(holding.weight),
     industry: industriesByCode.get(holding.stockCode)?.industryName || null,
     sector: stocksByCode.get(holding.stockCode)?.sector || null,
     topics: topicsByCode.get(holding.stockCode) || [],
@@ -704,6 +888,7 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     const technical = snapshot ? scoreTechnical(snapshot) : null
     return {
       ...candidate,
+      fundamentals: adjustFundamentalsForPrice(candidate.fundamentals, snapshot),
       technicals: snapshot?.technicals || null,
       technicalRules: snapshot?.technicalRules || null,
       bars: snapshot?.bars || null,
@@ -713,22 +898,43 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     }
   })
 
+  const targetCount = Math.min(Math.max(Number(plan.targetCount || 5), 1), 10)
+  const diversifyIndustry = Boolean(plan.needsRecommendation && targetCount >= 3 && !sectorFilters.length)
+  const rankedCandidates = rankScreeningCandidates(
+    filteredCandidates,
+    plan.rankingFactors,
+    targetCount,
+    {
+      diversifyIndustry,
+      industryLimit: 2,
+    },
+  )
+  const universeLabel = screeningUniverseLabel(universeType, plan.etfCodes || [])
+
   return {
     universeType,
+    universeLabel,
     etfCodes: plan.etfCodes,
     rankingFactors,
     appliedFilters: {
       sectors: sectorFilters,
       topics: topicFilters,
     },
-    targetCount: Math.min(Math.max(Number(plan.targetCount || 5), 1), 10),
+    targetCount,
     totalCandidates: baseCandidates.length,
     matchedCandidateCount: filteredCandidates.length,
-    rankedCandidates: rankScreeningCandidates(
-      filteredCandidates,
-      plan.rankingFactors,
-      Math.min(Math.max(Number(plan.targetCount || 5), 1), 10),
-    ),
+    rankedCandidates,
+    diversityRule: {
+      enabled: diversifyIndustry,
+      maxPerIndustry: diversifyIndustry ? 2 : null,
+    },
+    industryConcentration: summarizeIndustryConcentration(rankedCandidates),
+    dataBasis: {
+      universe: universeLabel,
+      price: 'TWSE MIS 即時或收盤報價',
+      fundamentals: 'TWSE BWIBBU_d 估值欄位，並以最新報價重新估算殖利率、PE、PB',
+      technicals: 'TWSE 日線歷史資料計算 MA、KD、RSI、MACD、Bollinger 與技術規則',
+    },
     candidates: filteredCandidates,
   }
 }
@@ -767,7 +973,9 @@ export async function buildAssistantScreeningDiagnostics(etfCode) {
 }
 
 export async function buildAssistantContext(plan) {
-  const etfCodes = [...new Set(plan.etfCodes || [])]
+  const etfCodes = plan.needsRecommendation
+    ? [DEFAULT_RECOMMENDATION_ETF_CODE]
+    : [...new Set(plan.etfCodes || [])]
   const explicitSymbols = [...new Set(plan.symbols || [])]
 
   const holdingsByEtf = {}
@@ -795,12 +1003,23 @@ export async function buildAssistantContext(plan) {
       fullTechnical: explicitCodeSet.has(code),
     })),
   )
-  const screening = await buildScreeningContext(plan, holdingsByEtf)
+  const fundamentalCodes = [...new Set([...explicitSymbols, ...holdingCodes])]
+  const fundamentalsRaw = fundamentalCodes.length
+    ? await getLatestFundamentals(fundamentalCodes)
+    : []
+  const snapshotsByCode = new Map(marketSnapshots.map((snapshot) => [snapshot.code, snapshot]))
+  const fundamentals = fundamentalsRaw.map((item) => (
+    adjustFundamentalsForPrice(item, snapshotsByCode.get(item.stockCode))
+  ))
+  const effectivePlan = { ...plan, etfCodes }
+  const screening = await buildScreeningContext(effectivePlan, holdingsByEtf)
 
   return {
     stocks,
+    requestedCodes: relevantCodes,
     holdingsByEtf,
     marketSnapshots,
+    fundamentals,
     screening,
     sources: [
       ...etfCodes.map((code) => ({
@@ -813,7 +1032,11 @@ export async function buildAssistantContext(plan) {
         code,
         source: 'TWSE',
       })),
-      ...(screening ? [{
+      ...(fundamentals.length ? [{
+        type: 'fundamentals',
+        source: 'TWSE.BWIBBU_d',
+      }] : []),
+      ...(screening && !fundamentals.length ? [{
         type: 'fundamentals',
         source: 'TWSE.BWIBBU_d',
       }] : []),

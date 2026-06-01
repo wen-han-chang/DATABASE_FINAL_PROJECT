@@ -16,6 +16,13 @@ const MIS_URL = 'https://mis.twse.com.tw/stock/api/getStockInfo.jsp'
 const FINMIND_URL = 'https://api.finmindtrade.com/api/v4/data'
 const UA = 'Mozilla/5.0 (database-final-project)'
 
+function isMarketCloseTime(timeText) {
+  const match = String(timeText || '').match(/^(\d{1,2}):(\d{2})/)
+  if (!match) return false
+  const minutes = Number(match[1]) * 60 + Number(match[2])
+  return minutes >= (13 * 60 + 30)
+}
+
 // 共用：把 "1,234.00" 這種字串轉成數字；轉不出來回 null
 function toNum(s) {
   if (s == null) return null
@@ -242,7 +249,7 @@ export async function fetchQuote(code) {
     const prevClose = toNum(m.y)
     // z=最近成交價；收盤前/無成交時可能是 "-"，退而用昨收當顯示價
     let price = toNum(m.z)
-    let closed = false
+    let closed = isMarketCloseTime(m.t || m['%'])
     if (price == null) {
       price = prevClose
       closed = true
