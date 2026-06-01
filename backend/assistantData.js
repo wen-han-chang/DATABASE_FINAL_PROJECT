@@ -4,6 +4,7 @@ import { fetchStockDayAll } from './twseClient.js'
 import { mapStockDayAll } from './twseMapper.js'
 import { getQuote, getStockBars } from './dao.js'
 import { summarizeTechnicalIndicators } from './technicalIndicators.js'
+import { analyzeTechnicalRules } from './technicalRules/index.js'
 import { getLatestFundamentals } from './assistantFundamentals.js'
 import {
   getLatestIndustries,
@@ -438,6 +439,7 @@ async function loadMarketSnapshot(
         error: barsResult.reason instanceof Error ? barsResult.reason.message : String(barsResult.reason || ''),
       },
     technicals: summarizeTechnicalIndicators(bars),
+    technicalRules: analyzeTechnicalRules(bars),
   }
 }
 
@@ -459,6 +461,13 @@ function chunkedMap(items, limit, mapper) {
 }
 
 function scoreTechnical(snapshot) {
+  if (snapshot.technicalRules?.available && snapshot.technicalRules?.scoring) {
+    return {
+      score: snapshot.technicalRules.scoring.totalScore,
+      reasons: snapshot.technicalRules.scoring.reasons || [],
+    }
+  }
+
   const technicals = snapshot.technicals
   if (!technicals) return null
 
@@ -665,6 +674,7 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     topics: topicsByCode.get(holding.stockCode) || [],
     fundamentals: fundamentalsByCode.get(holding.stockCode) || null,
     technicals: null,
+    technicalRules: null,
     bars: null,
     barsMeta: null,
     technicalScore: null,
@@ -695,6 +705,7 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     return {
       ...candidate,
       technicals: snapshot?.technicals || null,
+      technicalRules: snapshot?.technicalRules || null,
       bars: snapshot?.bars || null,
       barsMeta: snapshot?.barsMeta || null,
       technicalScore: technical?.score ?? null,

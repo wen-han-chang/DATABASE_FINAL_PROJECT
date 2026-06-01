@@ -1,6 +1,7 @@
 import { query, withTransaction, sql } from './db.js'
 import { getPortfolio, getQuote, getStockBars, getWatchlist } from './dao.js'
 import { summarizeTechnicalIndicators } from './technicalIndicators.js'
+import { analyzeTechnicalRules } from './technicalRules/index.js'
 
 const TAIPEI_TIME_ZONE = 'Asia/Taipei'
 const ON_DEMAND_SLOT = 'ondemand'
@@ -42,7 +43,14 @@ function summarizeBars(bars) {
   }
 }
 
-function scoreTechnical(technicals, barsSummary) {
+function scoreTechnical(technicals, technicalRules, barsSummary) {
+  if (technicalRules?.available && technicalRules?.scoring) {
+    return {
+      score: technicalRules.scoring.totalScore,
+      reasons: technicalRules.scoring.reasons || [],
+    }
+  }
+
   if (!technicals) return { score: null, reasons: ['技術資料不足'] }
 
   let score = 0
@@ -99,21 +107,26 @@ function buildHoldingAction({ technicalScore, pnlPct }) {
     }
   }
 
-  if (technicalScore <= -3 || (pnlPct <= -8 && technicalScore <= 0)) {
+  const usesRuleEngineScore = technicalScore > 10
+  const bearish = usesRuleEngineScore ? technicalScore <= 35 : technicalScore <= -3
+  const neutralOrWorse = usesRuleEngineScore ? technicalScore < 55 : technicalScore <= 0
+  const bullish = usesRuleEngineScore ? technicalScore >= 65 : technicalScore >= 3
+
+  if (bearish || (pnlPct <= -8 && neutralOrWorse)) {
     return {
       code: 'reduce_or_sell',
       label: '建議減碼 / 賣出',
     }
   }
 
-  if (pnlPct >= 12 && technicalScore < 1) {
+  if (pnlPct >= 12 && (usesRuleEngineScore ? technicalScore < 60 : technicalScore < 1)) {
     return {
       code: 'take_profit',
       label: '可考慮分批停利',
     }
   }
 
-  if (technicalScore >= 3) {
+  if (bullish) {
     return {
       code: 'hold',
       label: '可續抱',
@@ -134,14 +147,16 @@ function buildWatchlistAction(technicalScore) {
     }
   }
 
-  if (technicalScore >= 3) {
+  const usesRuleEngineScore = technicalScore > 10
+
+  if (usesRuleEngineScore ? technicalScore >= 65 : technicalScore >= 3) {
     return {
       code: 'consider_buy',
       label: '可考慮買進',
     }
   }
 
-  if (technicalScore <= -2) {
+  if (usesRuleEngineScore ? technicalScore <= 35 : technicalScore <= -2) {
     return {
       code: 'avoid_entry',
       label: '暫不建議進場',
@@ -177,12 +192,14 @@ async function loadSnapshot(code) {
   const bars = barsResult.status === 'fulfilled' ? barsResult.value.bars : []
   const barsSummary = summarizeBars(bars)
   const technicals = summarizeTechnicalIndicators(bars)
-  const technical = scoreTechnical(technicals, barsSummary)
+  const technicalRules = analyzeTechnicalRules(bars)
+  const technical = scoreTechnical(technicals, technicalRules, barsSummary)
 
   return {
     quote,
     barsSummary,
     technicals,
+    technicalRules,
     technicalScore: technical.score,
     technicalReasons: technical.reasons,
   }
