@@ -181,6 +181,7 @@ import { ref, computed, watch } from 'vue'
 import { Search, X, BarChart2 } from 'lucide-vue-next'
 import StockChart from '@/components/StockChart.vue'
 import { searchStocks, TW_STOCKS, seedFromCode } from '@/data/twStocks'
+import { getDbBars, searchDbStocks } from '@/services/twseApi'
 
 // ── Search state ──────────────────────────────
 const query       = ref('')
@@ -192,12 +193,27 @@ const inputEl     = ref(null)
 const searchWrap  = ref(null)
 
 let skipNextWatch = false
+let searchSeq = 0
 
-watch(query, (q) => {
+watch(query, async (q) => {
   if (skipNextWatch) { skipNextWatch = false; return }
-  results.value      = searchStocks(q)
+  const clean = q.trim()
+  const seq = ++searchSeq
+  if (!clean) {
+    results.value = []
+    highlighted.value = 0
+    showDropdown.value = false
+    return
+  }
+
+  try {
+    const payload = await searchDbStocks(clean, { limit: 10 })
+    if (seq === searchSeq) results.value = payload.data || []
+  } catch {
+    if (seq === searchSeq) results.value = searchStocks(clean)
+  }
   highlighted.value  = 0
-  showDropdown.value = q.trim().length > 0
+  showDropdown.value = clean.length > 0
 })
 
 function moveHighlight(dir) {
@@ -227,13 +243,27 @@ function clearQuery() {
 
 // ── Stock selection ───────────────────────────
 const selected = ref(null)
+const selectedBars = ref([])
+let selectedBarsSeq = 0
 
 function selectStock(stock) {
   selected.value     = stock
+  selectedBars.value = []
   skipNextWatch      = true
   query.value        = `${stock.code} ${stock.name}`
   showDropdown.value = false
   focused.value      = false
+  loadSelectedBars(stock.code)
+}
+
+async function loadSelectedBars(code) {
+  const seq = ++selectedBarsSeq
+  try {
+    const payload = await getDbBars(code, { quick: 1 })
+    if (seq === selectedBarsSeq) selectedBars.value = payload.data || []
+  } catch {
+    if (seq === selectedBarsSeq) selectedBars.value = []
+  }
 }
 
 // ── Hot stocks ────────────────────────────────
@@ -241,47 +271,24 @@ const hotStocks = TW_STOCKS.filter(s =>
   ['2330','2454','2382','0050','2603','3008','2317','2327'].includes(s.code)
 )
 
-// ── Practice price stats ──────────────────────
-// Derive deterministic values from the seeded PRNG last bar
-function getLastTwoBars(stock) {
-  // Small inline re-generation of just last 2 closes
-  function mulberry32(seed) {
-    return () => {
-      seed |= 0; seed = (seed + 0x6d2b79f5) | 0
-      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-    }
-  }
-  const rand = mulberry32(seedFromCode(stock.code))
-  // Run 298 steps to get to second-to-last, then last
-  let p = stock.price, prev = stock.price
-  for (let i = 0; i < 300; i++) {
-    const vol = (stock.vol ?? 0.018) * (0.8 + rand() * 0.7)
-    const u1 = Math.max(rand(), 1e-10), u2 = rand()
-    const z  = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
-    const next = p * Math.exp(0.0003 + vol * z)
-    if (i === 297) prev = p
-    if (i === 299) { return { prev, last: next } }
-    p = next
-  }
-  return { prev: p, last: p }
-}
+// Price stats come from the latest bars returned by the backend.
+const latestBar = computed(() => selectedBars.value.at(-1) || null)
+const previousBar = computed(() => selectedBars.value.at(-2) || null)
 
 const latestClose = computed(() => {
   if (!selected.value) return 0
-  return getLastTwoBars(selected.value).last
+  return Number(latestBar.value?.close ?? selected.value.price ?? 0)
 })
 
 const prevClose = computed(() => {
   if (!selected.value) return 0
-  return getLastTwoBars(selected.value).prev
+  return Number(previousBar.value?.close ?? selected.value.price ?? latestClose.value)
 })
 
 const priceChange = computed(() => latestClose.value - prevClose.value)
-const priceChangePct = computed(() => (priceChange.value / prevClose.value) * 100)
+const priceChangePct = computed(() => prevClose.value ? (priceChange.value / prevClose.value) * 100 : 0)
 
-const statsStrip = computed(() => {
+const statsStripMock = computed(() => {
   if (!selected.value) return []
   const lc = latestClose.value
   const seed = seedFromCode(selected.value.code)
@@ -296,6 +303,17 @@ const statsStrip = computed(() => {
 })
 
 // ── AI analysis text (per stock) ─────────────
+const statsStrip = computed(() => {
+  if (!selected.value) return []
+  const bar = latestBar.value
+  return [
+    { label: '開盤', value: bar ? Number(bar.open).toFixed(1) : '載入中', colorClass: '' },
+    { label: '最高', value: bar ? Number(bar.high).toFixed(1) : '載入中', colorClass: 'text-stock-up' },
+    { label: '最低', value: bar ? Number(bar.low).toFixed(1) : '載入中', colorClass: 'text-stock-down' },
+    { label: '成交量', value: bar ? `${Number(bar.volume).toLocaleString('zh-TW')} 股` : '載入中', colorClass: '' },
+  ]
+})
+
 const aiAnalysis = computed(() => {
   if (!selected.value) return ''
   const s  = selected.value

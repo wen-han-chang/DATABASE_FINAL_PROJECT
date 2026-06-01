@@ -682,7 +682,7 @@ import {
 import { usePortfolioStore } from '@/stores/portfolio'
 import { useWatchlistStore } from '@/stores/watchlist'
 import { searchStocks, findStock } from '@/data/twStocks'
-import { getQuote } from '@/services/twseApi'
+import { getQuote, searchDbStocks } from '@/services/twseApi'
 
 const portfolio  = usePortfolioStore()
 const watchlist  = useWatchlistStore()
@@ -792,11 +792,26 @@ const showDrop     = ref(false)
 const hlIdx        = ref(0)
 const searchInput  = ref(null)
 const activeStock  = ref(null)
+let searchSeq = 0
 
-watch(query, (q) => {
-  searchResults.value = searchStocks(q)
+watch(query, async (q) => {
+  const clean = q.trim()
+  const seq = ++searchSeq
+  if (!clean) {
+    searchResults.value = []
+    hlIdx.value = 0
+    showDrop.value = false
+    return
+  }
+
+  try {
+    const payload = await searchDbStocks(clean, { limit: 10 })
+    if (seq === searchSeq) searchResults.value = payload.data || []
+  } catch {
+    if (seq === searchSeq) searchResults.value = searchStocks(clean)
+  }
   hlIdx.value         = 0
-  showDrop.value      = q.trim().length > 0
+  showDrop.value      = clean.length > 0
 })
 
 function moveHL(dir) {
@@ -832,8 +847,14 @@ function pickStock(stock) {
   fetchLivePrice(stock.code)
   startPricePolling(stock.code)
 }
-function quickSelect(code) {
-  const stock = findStock(code)
+async function quickSelect(code) {
+  let stock = null
+  try {
+    const payload = await searchDbStocks(code, { limit: 1 })
+    stock = payload.data?.find((item) => item.code === code) || payload.data?.[0] || null
+  } catch {
+    stock = findStock(code)
+  }
   if (stock) pickStock(stock)
   activeTab.value = '持股明細'
 }

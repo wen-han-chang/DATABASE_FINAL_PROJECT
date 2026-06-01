@@ -44,6 +44,7 @@ import {
   getStockBars,
   getQuote,
   getMarginPositions,
+  searchDbStocks,
   openMarginPosition,
   coverMarginPosition,
   settleDefaultPositions,
@@ -393,6 +394,22 @@ const server = http.createServer(async (req, res) => {
           code,
           count: result.bars.length,
           data: result.bars,
+        })
+      } catch (error) {
+        sendDaoError(res, error)
+      }
+      return
+    }
+
+    if (requestUrl.pathname === '/api/stocks/search') {
+      try {
+        const q = requestUrl.searchParams.get('q') || ''
+        const limit = requestUrl.searchParams.get('limit') || undefined
+        const data = await searchDbStocks(q, { limit })
+        sendJson(res, 200, {
+          ok: true,
+          count: data.length,
+          data,
         })
       } catch (error) {
         sendDaoError(res, error)
