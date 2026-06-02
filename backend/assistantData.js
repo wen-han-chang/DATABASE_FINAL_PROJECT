@@ -828,8 +828,12 @@ async function buildScreeningContext(plan, holdingsByEtf) {
   if (!universeRows.length) return null
 
   const codes = universeRows.map((row) => row.stockCode)
+  const rankingFactors = normalizeRankingFactors(plan.rankingFactors)
+  const needsFundamentals = rankingFactors.some((factor) => (
+    factor === 'dividend_yield' || factor === 'low_pe' || factor === 'low_pb'
+  ))
   const [fundamentals, industries, topicRows, stockRows] = await Promise.all([
-    getLatestFundamentals(codes),
+    needsFundamentals ? getLatestFundamentals(codes) : Promise.resolve([]),
     getLatestIndustries(codes),
     getTopicsForStocks(codes),
     readExistingStocks(codes),
@@ -870,7 +874,6 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     matchesIndustry(candidate, sectorFilters) && matchesTopics(candidate, topicFilters)
   ))
 
-  const rankingFactors = normalizeRankingFactors(plan.rankingFactors)
   const needsTechnicalSnapshots = rankingFactors.includes('technical_strength')
   const snapshotCodes = needsTechnicalSnapshots
     ? filteredBaseCandidates.map((candidate) => candidate.code)
@@ -932,7 +935,9 @@ async function buildScreeningContext(plan, holdingsByEtf) {
     dataBasis: {
       universe: universeLabel,
       price: 'TWSE MIS 即時或收盤報價',
-      fundamentals: 'TWSE BWIBBU_d 估值欄位，並以最新報價重新估算殖利率、PE、PB',
+      fundamentals: needsFundamentals
+        ? 'TWSE BWIBBU_d 估值欄位，並以最新報價重新估算殖利率、PE、PB'
+        : '本次排序未使用基本面估值欄位',
       technicals: 'TWSE 日線歷史資料計算 MA、KD、RSI、MACD、Bollinger 與技術規則',
     },
     candidates: filteredCandidates,
@@ -1003,7 +1008,13 @@ export async function buildAssistantContext(plan) {
       fullTechnical: explicitCodeSet.has(code),
     })),
   )
-  const fundamentalCodes = [...new Set([...explicitSymbols, ...holdingCodes])]
+  const contextRankingFactors = normalizeRankingFactors(plan.rankingFactors)
+  const needsRecommendationFundamentals = contextRankingFactors.some((factor) => (
+    factor === 'dividend_yield' || factor === 'low_pe' || factor === 'low_pb'
+  ))
+  const fundamentalCodes = plan.needsRecommendation && !needsRecommendationFundamentals
+    ? explicitSymbols
+    : [...new Set([...explicitSymbols, ...holdingCodes])]
   const fundamentalsRaw = fundamentalCodes.length
     ? await getLatestFundamentals(fundamentalCodes)
     : []
