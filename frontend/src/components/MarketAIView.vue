@@ -51,7 +51,7 @@
           </p>
           <div class="flex items-center gap-3 mt-3">
             <button
-              @click="$emit('open-drawer', `#${strongestSector.name}`)"
+              @click="$emit('open-drawer', sectorKbKey(strongestSector.name))"
               class="text-xs bg-blue-500 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-blue-600 transition-colors"
             >
               查看族群說明
@@ -78,6 +78,58 @@ import { BrainCircuit, MessageCircle, TrendingUp, TrendingDown, Minus, X } from 
 import { getMarketIndex } from '@/services/twseApi'
 
 defineEmits(['open-drawer'])
+
+const SECTOR_KB_KEY = {
+  // 半導體
+  '半導體類指數':         '#半導體',
+  // 電子相關
+  '電子工業類指數':       '#電子',
+  '電腦及週邊設備類指數': '#電子',
+  '其他電子類指數':       '#電子',
+  '光電類指數':           '#電子',
+  '通信網路類指數':       '#電子',
+  '電子零組件類指數':     '#電子',
+  '電子通路類指數':       '#電子',
+  '資訊服務類指數':       '#電子',
+  '數位雲端類指數':       '#電子',
+  '機電類指數':           '#電子',
+  '電機機械類指數':       '#電子',
+  '電器電纜類指數':       '#電子',
+  // 金融
+  '金融保險類指數':       '#金融',
+  // 航運
+  '航運類指數':           '#航運',
+  // 鋼鐵
+  '鋼鐵類指數':           '#鋼鐵',
+  // 生技
+  '生技醫療類指數':       '#生技',
+  '化學生技醫療類指數':   '#生技',
+  // 傳產
+  '塑膠類指數':           '#傳產',
+  '塑膠化工類指數':       '#傳產',
+  '紡織纖維類指數':       '#傳產',
+  '食品類指數':           '#傳產',
+  '化學類指數':           '#傳產',
+  '橡膠類指數':           '#傳產',
+  '汽車類指數':           '#傳產',
+  '造紙類指數':           '#傳產',
+  '水泥類指數':           '#傳產',
+  '水泥窯製類指數':       '#傳產',
+  '玻璃陶瓷類指數':       '#傳產',
+  '貿易百貨類指數':       '#傳產',
+  '油電燃氣類指數':       '#傳產',
+  '建材營造類指數':       '#傳產',
+  '觀光餐旅類指數':       '#傳產',
+  '運動休閒類指數':       '#傳產',
+  '居家生活類指數':       '#傳產',
+  // 其他
+  '綠能環保類指數':       '#台股',
+  '其他類指數':           '#台股',
+}
+
+function sectorKbKey(name) {
+  return SECTOR_KB_KEY[name] || `#${name}`
+}
 
 const loading = ref(true)
 const error = ref('')

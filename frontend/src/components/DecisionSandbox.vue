@@ -19,7 +19,7 @@
       </div>
     </div>
 
-    <div v-if="loading" class="space-y-3">
+    <div v-if="loading || watchlist.loading" class="space-y-3">
       <div v-for="i in 4" :key="i" class="bg-white rounded-xl border border-slate-100 shadow-sm p-4">
         <div class="h-4 w-24 bg-slate-100 rounded animate-pulse mb-3" />
         <div class="h-3 w-full bg-slate-100 rounded animate-pulse" />
@@ -29,6 +29,14 @@
     <div v-else-if="error" class="bg-red-50 border border-red-200 rounded-xl p-4">
       <p class="text-sm font-semibold text-red-700">即時資料讀取失敗</p>
       <p class="text-sm text-red-600 mt-1">{{ error }}</p>
+    </div>
+
+    <div v-else-if="isWatchlistEmpty"
+         class="bg-blue-50 border border-blue-200 rounded-xl p-6 text-center">
+      <p class="text-sm font-semibold text-blue-700">尚未加入自選股</p>
+      <p class="text-sm text-blue-600 mt-1">
+        請先前往「下單練習 &gt; 自選清單」加入想觀察的股票，最多顯示前 5 檔。
+      </p>
     </div>
 
     <TransitionGroup v-else name="card-list" tag="div" class="space-y-3">
@@ -108,13 +116,16 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { Lightbulb } from 'lucide-vue-next'
 import { getQuote, searchDbStocks } from '@/services/twseApi'
+import { useWatchlistStore } from '@/stores/watchlist'
 
 defineEmits(['open-drawer'])
 
-const WATCH_CODES = ['2330', '2454', '2317', '2603', '0050']
+const watchlist = useWatchlistStore()
+const watchCodes = computed(() => watchlist.items.slice(0, 5).map(i => i.code))
+const isWatchlistEmpty = computed(() => !watchlist.loading && watchlist.items.length === 0)
 
 const activeTab = ref('ALL')
 const loading = ref(true)
@@ -187,11 +198,51 @@ function buildReason(stock, quote, status) {
   return `${stock.name}今日即時價格呈現${direction}，漲跌幅 ${signedPercent(changePct)}，${volumeText}`
 }
 
+function buildTags(stock, quote) {
+  const tags = [`#${stock.sector || '台股'}`]
+
+  const changePct = finiteNumber(quote.changePct)
+  const price     = finiteNumber(quote.price)
+  const prevClose = finiteNumber(quote.prevClose, price)
+  const open      = finiteNumber(quote.open, price)
+  const high      = finiteNumber(quote.high, price)
+  const low       = finiteNumber(quote.low, price)
+
+  if (prevClose > 0) {
+    const gapPct = (open - prevClose) / prevClose * 100
+    if (gapPct >= 1)       tags.push('#跳空開高')
+    else if (gapPct <= -1) tags.push('#跳空開低')
+  }
+
+  if      (changePct >= 9.5)  tags.push('#漲停鎖死')
+  else if (changePct >= 3)    tags.push('#強勢上漲')
+  else if (changePct >= 0.5)  tags.push('#溫和上漲')
+  else if (changePct <= -9.5) tags.push('#跌停鎖死')
+  else if (changePct <= -3)   tags.push('#弱勢下跌')
+  else if (changePct <= -0.5) tags.push('#溫和下跌')
+  else                        tags.push('#盤整平盤')
+
+  if (prevClose > 0 && high > low) {
+    const range = high - low
+    if (range / prevClose > 0.03) tags.push('#震盪加劇')
+    const upperShadow = high - Math.max(price, open)
+    const lowerShadow = Math.min(price, open) - low
+    if (upperShadow / range > 0.5)      tags.push('#長上影線')
+    else if (lowerShadow / range > 0.5) tags.push('#長下影線')
+  }
+
+  return tags.slice(0, 4)
+}
+
 async function loadCards() {
+  if (!watchCodes.value.length) {
+    loading.value = false
+    return
+  }
   loading.value = true
   error.value = ''
   try {
-    const rows = await Promise.all(WATCH_CODES.map(async (code) => {
+    const rows = await Promise.all(watchCodes.value.map(async (code) => {
       const [stockPayload, quotePayload] = await Promise.all([
         searchDbStocks(code, { limit: 1 }),
         getQuote(code),
@@ -218,7 +269,7 @@ async function loadCards() {
         low: finiteNumber(quote.low, price),
         time: quote.time,
         reason: buildReason(stock, { ...quote, changePct }, status),
-        tags: [`#${stock.sector || '台股'}`, `#${status === 'UP' ? '上漲' : status === 'DOWN' ? '下跌' : '平盤'}`, `#${code}`],
+        tags: buildTags(stock, { ...quote, changePct }),
       }
     }))
     cards.value = rows.sort((a, b) => Math.abs(b.changePct) - Math.abs(a.changePct))
@@ -234,6 +285,12 @@ const filteredCards = computed(() =>
     ? cards.value
     : cards.value.filter((card) => card.status === activeTab.value),
 )
+
+watch(watchCodes, (newCodes, oldCodes) => {
+  if (JSON.stringify(newCodes) !== JSON.stringify(oldCodes)) {
+    loadCards()
+  }
+})
 
 onMounted(loadCards)
 </script>
