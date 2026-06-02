@@ -276,6 +276,9 @@
               <span class="w-2 h-2 rounded-full bg-slate-300 animate-bounce [animation-delay:120ms]" />
               <span class="w-2 h-2 rounded-full bg-slate-300 animate-bounce [animation-delay:240ms]" />
             </div>
+            <p v-if="slowNotice" class="text-xs text-brand-muted mt-2">
+              資料量較大，仍在整理分析結果...
+            </p>
           </div>
         </article>
       </div>
@@ -315,6 +318,8 @@ const draft = ref('')
 const loading = ref(false)
 const error = ref('')
 const messageWrap = ref(null)
+const slowNotice = ref(false)
+let slowNoticeTimer = null
 
 function formatValue(value) {
   return value == null ? '—' : value
@@ -426,6 +431,11 @@ async function sendMessage() {
   draft.value = ''
   error.value = ''
   loading.value = true
+  slowNotice.value = false
+  if (slowNoticeTimer) window.clearTimeout(slowNoticeTimer)
+  slowNoticeTimer = window.setTimeout(() => {
+    slowNotice.value = true
+  }, 20000)
   await scrollToBottom()
 
   try {
@@ -438,6 +448,11 @@ async function sendMessage() {
   } catch (err) {
     error.value = err?.message || 'AI 助理暫時無法回覆。'
   } finally {
+    if (slowNoticeTimer) {
+      window.clearTimeout(slowNoticeTimer)
+      slowNoticeTimer = null
+    }
+    slowNotice.value = false
     loading.value = false
     await scrollToBottom()
   }

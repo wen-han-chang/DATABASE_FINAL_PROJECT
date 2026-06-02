@@ -80,12 +80,64 @@ const classifierSchema = {
   ],
 }
 
+function compactHoldingsByEtf(holdingsByEtf = {}) {
+  return Object.fromEntries(
+    Object.entries(holdingsByEtf).map(([code, rows]) => [code, {
+      count: rows.length,
+      topHoldings: rows.slice(0, 10),
+    }]),
+  )
+}
+
+function compactScreening(screening) {
+  if (!screening) return null
+  return {
+    universeType: screening.universeType,
+    universeLabel: screening.universeLabel,
+    etfCodes: screening.etfCodes,
+    rankingFactors: screening.rankingFactors,
+    appliedFilters: screening.appliedFilters,
+    targetCount: screening.targetCount,
+    totalCandidates: screening.totalCandidates,
+    matchedCandidateCount: screening.matchedCandidateCount,
+    diversityRule: screening.diversityRule,
+    industryConcentration: screening.industryConcentration,
+    dataBasis: screening.dataBasis,
+    rankedCandidates: (screening.rankedCandidates || []).map((candidate) => ({
+      code: candidate.code,
+      name: candidate.name,
+      rank: candidate.rank,
+      score: candidate.score,
+      weight: candidate.weight,
+      industry: candidate.industry,
+      topics: candidate.topics,
+      rankingFactors: candidate.rankingFactors,
+      rankingFactorWeights: candidate.rankingFactorWeights,
+      factorBreakdown: candidate.factorBreakdown,
+      technicalReasons: candidate.technicalReasons,
+      fundamentals: candidate.fundamentals,
+      technicals: candidate.technicals,
+      technicalRules: candidate.technicalRules,
+      bars: candidate.bars,
+      barsMeta: candidate.barsMeta,
+    })),
+  }
+}
+
 function stringifyContext(context) {
+  const screeningCodes = new Set(context.screening?.rankedCandidates?.map((candidate) => candidate.code) || [])
+  const marketSnapshots = screeningCodes.size
+    ? context.marketSnapshots.filter((snapshot) => screeningCodes.has(snapshot.code))
+    : context.marketSnapshots
+  const fundamentals = screeningCodes.size
+    ? (context.fundamentals || []).filter((item) => screeningCodes.has(item.stockCode))
+    : (context.fundamentals || [])
+
   return JSON.stringify({
     stocks: context.stocks,
-    holdingsByEtf: context.holdingsByEtf,
-    marketSnapshots: context.marketSnapshots,
-    fundamentals: (context.fundamentals || []).map((item) => ({
+    holdingsByEtf: compactHoldingsByEtf(context.holdingsByEtf),
+    marketSnapshots,
+    fundamentals: fundamentals.map((item) => ({
       stockCode: item.stockCode,
       stockName: item.stockName,
       dataDate: item.tradeDate,
@@ -102,7 +154,7 @@ function stringifyContext(context) {
       adjustedToLatestPrice: Boolean(item.priceAdjusted),
       valuationAvailability: item.valuationAvailability,
     })),
-    screening: context.screening,
+    screening: compactScreening(context.screening),
   }, null, 2)
 }
 
@@ -141,6 +193,11 @@ function normalizeClassification(classification, message) {
   const recommendationIntent = /(推薦|排行|排名|前\s*\d+\s*(?:名|檔)|挑出|選出|最強|值得買)/.test(message)
   if (recommendationIntent) {
     normalized.needsRecommendation = true
+  }
+
+  const shortTermMomentumIntent = /(明天|隔日|短線|當沖|波段|暴漲|噴出|急漲|突破)/.test(message)
+  if (recommendationIntent && shortTermMomentumIntent) {
+    normalized.rankingFactors = ['technical_strength']
   }
 
   if (recommendationIntent && GENERIC_STOCK_RECOMMENDATION_HINT.test(message)) {
@@ -189,7 +246,7 @@ function normalizeClassification(classification, message) {
 
   const wantsOverallRecommendation = /(最值得買|推薦|值得買|首選)/.test(message)
   const hasExplicitRankingFactor = /(技術面|技術指標|殖利率|本益比|股價淨值比|權重)/.test(message)
-  if (wantsOverallRecommendation && !hasExplicitRankingFactor) {
+  if (wantsOverallRecommendation && !hasExplicitRankingFactor && !shortTermMomentumIntent) {
     normalized.rankingFactors = DEFAULT_RECOMMENDATION_FACTORS
   }
 
@@ -197,6 +254,7 @@ function normalizeClassification(classification, message) {
     recommendationIntent
     && GENERIC_STOCK_RECOMMENDATION_HINT.test(message)
     && !hasExplicitRankingFactor
+    && !shortTermMomentumIntent
   ) {
     normalized.rankingFactors = DEFAULT_RECOMMENDATION_FACTORS
   }
@@ -369,7 +427,7 @@ export async function answerStockQuestion(message) {
       '如果使用者要求的條件無法由 rankingFactors 或 context 中的欄位支援，例如沒有可驗證的主題分類，請明確說明目前資料不足，不可自行臆測分類。',
       '若 classification.needsMarketData 為 false，且問題只是一般投資概念，你可以用一般金融知識回答。',
       '如果 context 不足以支持使用者要求，請直接說明目前資料不足，指出缺少什麼，不可自行補編。',
-      '若使用者要求推薦，第一段先用簡短結論開頭，再補篩選範圍、資料依據與理由；不要輸出「1 到 2 句」、「1–2 句」或類似提示文字。如果不是 ETF 問題，不要主動提 ETF 權重。',
+      '若使用者要求推薦，第一段先用簡短結論開頭，再補篩選範圍、資料依據與理由；不要輸出「1 到 2 句」、「1–2 句」、「1 到 2 行」、「1–2 行」、「每檔說明 1–2 行」或類似提示文字。如果不是 ETF 問題，不要主動提 ETF 權重。',
       '推薦回答請用「研究名單」、「優先觀察」等措辭，不要寫成保證或直接下單指令；不要主動提供「買入價格區間」，若需要價位請改說支撐、壓力與觀察條件。',
       '不要回答台股以外的問題。',
       '回答最後加上一句：以上為資料整理與研究輔助，非投資建議。',
