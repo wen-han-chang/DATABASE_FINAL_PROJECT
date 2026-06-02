@@ -137,15 +137,6 @@
           </div>
         </div>
 
-        <!-- Stats strip -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <div v-for="stat in statsStrip" :key="stat.label"
-            class="bg-white rounded-xl p-3 shadow-sm border border-slate-100">
-            <p class="text-xs text-brand-muted mb-1">{{ stat.label }}</p>
-            <p class="font-semibold text-brand-primary text-sm" :class="stat.colorClass">{{ stat.value }}</p>
-          </div>
-        </div>
-
         <!-- K-line chart -->
         <StockChart :stock="selected" :height="460" />
 
@@ -288,32 +279,7 @@ const prevClose = computed(() => {
 const priceChange = computed(() => latestClose.value - prevClose.value)
 const priceChangePct = computed(() => prevClose.value ? (priceChange.value / prevClose.value) * 100 : 0)
 
-const statsStripMock = computed(() => {
-  if (!selected.value) return []
-  const lc = latestClose.value
-  const seed = seedFromCode(selected.value.code)
-  // Deterministic pseudo-stats from seed
-  const r = ((seed * 1234567) % 1000) / 1000
-  return [
-    { label: '開盤',   value: (lc * (0.99 + r * 0.02)).toFixed(1),  colorClass: '' },
-    { label: '最高',   value: (lc * (1.01 + r * 0.01)).toFixed(1),  colorClass: 'text-stock-up' },
-    { label: '最低',   value: (lc * (0.98 - r * 0.005)).toFixed(1), colorClass: 'text-stock-down' },
-    { label: '成交量', value: `${Math.round(20000 + r * 80000).toLocaleString()} 張`, colorClass: '' },
-  ]
-})
-
 // ── AI analysis text (per stock) ─────────────
-const statsStrip = computed(() => {
-  if (!selected.value) return []
-  const bar = latestBar.value
-  return [
-    { label: '開盤', value: bar ? Number(bar.open).toFixed(1) : '載入中', colorClass: '' },
-    { label: '最高', value: bar ? Number(bar.high).toFixed(1) : '載入中', colorClass: 'text-stock-up' },
-    { label: '最低', value: bar ? Number(bar.low).toFixed(1) : '載入中', colorClass: 'text-stock-down' },
-    { label: '成交量', value: bar ? `${Number(bar.volume).toLocaleString('zh-TW')} 股` : '載入中', colorClass: '' },
-  ]
-})
-
 const aiAnalysis = computed(() => {
   if (!selected.value) return ''
   const s  = selected.value
