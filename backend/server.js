@@ -502,11 +502,14 @@ const server = http.createServer(async (req, res) => {
      * 這是最適合先接前端的範例，因為它是「整體市場」而不是單一個股。
      */
     if (requestUrl.pathname === '/api/twse/market-index') {
-      const data = await fetchMarketIndex()
+      const result = await fetchMarketIndex()
       sendJson(res, 200, {
         ok: true,
-        endpoint: TWSE_SAMPLE_ENDPOINTS.marketIndex,
-        data,
+        endpoint: result.endpoint || TWSE_SAMPLE_ENDPOINTS.marketIndex,
+        source: result.source,
+        dataDate: result.dataDate,
+        queryDate: result.queryDate,
+        data: result.data,
       })
       return
     }

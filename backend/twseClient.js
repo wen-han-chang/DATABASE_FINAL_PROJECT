@@ -11,6 +11,7 @@
  */
 
 const DEFAULT_BASE_URL = 'https://openapi.twse.com.tw/v1'
+const DEFAULT_TWSE_WEB_BASE_URL = 'https://www.twse.com.tw'
 const DEFAULT_TIMEOUT_MS = 30000
 const DEFAULT_USER_AGENT = 'database-final-project/1.0'
 
@@ -82,18 +83,20 @@ function buildTwseUrl(path, query = {}) {
   return url
 }
 
-/**
- * 發送 GET 請求到 TWSE，並把回傳內容當作 JSON 處理。
- *
- * 為什麼這裡直接回 JSON：
- * - 這類資料服務幾乎都是 JSON。
- * - 前端和後端都比較好處理。
- *
- * 如果 TWSE 某次回傳非 JSON，這裡會直接丟錯，讓 server.js 統一處理。
- */
-export async function fetchTwseJson(path, query = {}) {
+function buildTwseWebUrl(path, query = {}) {
+  const normalizedPath = normalizePath(path)
+  const url = new URL(`${DEFAULT_TWSE_WEB_BASE_URL}${normalizedPath}`)
+  const params = toSearchParams(query)
+
+  for (const [key, value] of params.entries()) {
+    url.searchParams.set(key, value)
+  }
+
+  return url
+}
+
+async function fetchJsonUrl(url) {
   const { timeoutMs, userAgent } = getConfig()
-  const url = buildTwseUrl(path, query)
   const controller = new AbortController()
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`TWSE request timed out after ${timeoutMs} ms.`))
@@ -121,6 +124,20 @@ export async function fetchTwseJson(path, query = {}) {
 }
 
 /**
+ * 發送 GET 請求到 TWSE，並把回傳內容當作 JSON 處理。
+ *
+ * 為什麼這裡直接回 JSON：
+ * - 這類資料服務幾乎都是 JSON。
+ * - 前端和後端都比較好處理。
+ *
+ * 如果 TWSE 某次回傳非 JSON，這裡會直接丟錯，讓 server.js 統一處理。
+ */
+export async function fetchTwseJson(path, query = {}) {
+  const url = buildTwseUrl(path, query)
+  return fetchJsonUrl(url)
+}
+
+/**
  * 這是你會最常用到的官方 Swagger 文件。
  * 先把它透過 backend 轉出去，方便前端或除錯工具直接讀。
  */
@@ -138,8 +155,102 @@ export async function fetchTwseSwagger() {
  */
 export const TWSE_SAMPLE_ENDPOINTS = {
   marketIndex: '/exchangeReport/MI_INDEX',
+  marketIndexDaily: '/exchangeReport/MI_INDEX',
   stockDayAll: '/exchangeReport/STOCK_DAY_ALL',
   stockDayAverageAll: '/exchangeReport/STOCK_DAY_AVG_ALL',
+}
+
+function toTaipeiDate(date = new Date()) {
+  return new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Taipei' }))
+}
+
+function toTwseDateText(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}${m}${d}`
+}
+
+function toRocDateText(yyyymmdd) {
+  const text = String(yyyymmdd || '')
+  if (!/^\d{8}$/.test(text)) return ''
+  const rocYear = String(Number(text.slice(0, 4)) - 1911).padStart(3, '0')
+  return `${rocYear}${text.slice(4)}`
+}
+
+function previousCalendarDates(startDate, days = 5) {
+  const dates = []
+  const cursor = new Date(startDate)
+  while (dates.length < days) {
+    dates.push(toTwseDateText(cursor))
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return dates
+}
+
+function normalizeDailyMarketIndex(payload, yyyymmdd) {
+  const tables = Array.isArray(payload?.tables) ? payload.tables : []
+  const table = tables.find((item) => {
+    const fields = item?.fields || []
+    return fields.includes('指數') && fields.some((field) => String(field).includes('收盤指數'))
+  })
+
+  if (!table || !Array.isArray(table.data) || !table.data.length) return []
+
+  return table.data
+    .map((row) => {
+      const values = Array.isArray(row) ? row : []
+      const indexName = values[0]
+      const close = values[1]
+      const directionRaw = values[2]
+      const changePoint = values[3]
+      const changePct = values[4]
+      if (!indexName || close == null) return null
+      const directionText = String(directionRaw || '')
+      const direction = directionText.includes('-') ? '-' : '+'
+      return {
+        日期: toRocDateText(yyyymmdd),
+        指數: String(indexName).trim(),
+        收盤指數: String(close).trim(),
+        漲跌: direction,
+        漲跌點數: String(changePoint ?? '').trim(),
+        漲跌百分比: String(changePct ?? '').trim(),
+        特殊處理註記: '',
+      }
+    })
+    .filter(Boolean)
+}
+
+async function fetchMarketIndexFromDailyReport() {
+  const today = toTaipeiDate()
+  const dates = previousCalendarDates(today, 7)
+
+  for (const date of dates) {
+    const url = buildTwseWebUrl(TWSE_SAMPLE_ENDPOINTS.marketIndexDaily, {
+      response: 'json',
+      date,
+      type: 'ALLBUT0999',
+    })
+
+    try {
+      const payload = await fetchJsonUrl(url)
+      const rows = normalizeDailyMarketIndex(payload, date)
+      const taiex = rows.find((row) => row['指數'] === '發行量加權股價指數')
+      if (taiex) {
+        return {
+          source: 'TWSE daily MI_INDEX',
+          endpoint: TWSE_SAMPLE_ENDPOINTS.marketIndexDaily,
+          queryDate: date,
+          dataDate: taiex['日期'],
+          data: rows,
+        }
+      }
+    } catch {
+      // Try the next recent date, then fall back to OpenAPI below.
+    }
+  }
+
+  return null
 }
 
 /**
@@ -147,7 +258,19 @@ export const TWSE_SAMPLE_ENDPOINTS = {
  * 這個函式會被 server.js 的 /api/twse/market-index 路由使用。
  */
 export async function fetchMarketIndex() {
-  return fetchTwseJson(TWSE_SAMPLE_ENDPOINTS.marketIndex)
+  const daily = await fetchMarketIndexFromDailyReport()
+  if (daily) return daily
+
+  const data = await fetchTwseJson(TWSE_SAMPLE_ENDPOINTS.marketIndex)
+  const taiex = Array.isArray(data)
+    ? data.find((row) => row?.['指數'] === '發行量加權股價指數')
+    : null
+  return {
+    source: 'TWSE OpenAPI',
+    endpoint: TWSE_SAMPLE_ENDPOINTS.marketIndex,
+    dataDate: taiex?.['日期'] || null,
+    data,
+  }
 }
 
 /**
