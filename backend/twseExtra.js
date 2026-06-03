@@ -247,12 +247,18 @@ export async function fetchQuote(code) {
     if (!m) continue
 
     const prevClose = toNum(m.y)
-    // z=最近成交價；收盤前/無成交時可能是 "-"，退而用昨收當顯示價
+    // z=最近成交價；盤中偶爾回傳 "-"（無最近成交），改用委買賣中間價估算
     let price = toNum(m.z)
     let closed = isMarketCloseTime(m.t || m['%'])
     if (price == null) {
-      price = prevClose
-      closed = true
+      const bestBid = toNum((m.b || '').split('_')[0])
+      const bestAsk = toNum((m.a || '').split('_')[0])
+      if (bestBid != null && bestAsk != null) {
+        price = +((bestBid + bestAsk) / 2).toFixed(2)
+      } else {
+        price = bestBid ?? bestAsk ?? prevClose
+      }
+      // closed 由 isMarketCloseTime 決定，z="-" 不代表收盤
     }
     const change = price != null && prevClose != null ? +(price - prevClose).toFixed(2) : null
     const changePct =
