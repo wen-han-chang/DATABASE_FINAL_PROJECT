@@ -172,15 +172,15 @@ function decorateStatus(status) {
   if (status === 'UP') {
     return {
       statusLabel: '上漲',
-      accentClass: 'bg-green-500',
-      badgeClass: 'bg-green-50 text-green-700',
+      accentClass: 'bg-red-500',
+      badgeClass: 'bg-red-50 text-red-700',
     }
   }
   if (status === 'DOWN') {
     return {
       statusLabel: '下跌',
-      accentClass: 'bg-red-500',
-      badgeClass: 'bg-red-50 text-red-700',
+      accentClass: 'bg-green-500',
+      badgeClass: 'bg-green-50 text-green-700',
     }
   }
   return {

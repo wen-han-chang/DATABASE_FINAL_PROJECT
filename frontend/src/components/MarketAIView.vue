@@ -215,8 +215,8 @@ const sentimentPills = computed(() => {
 })
 
 function pillClass(pill) {
-  if (pill.value > 0) return 'bg-green-500/20 text-green-300'
-  if (pill.value < 0) return 'bg-red-500/20 text-red-300'
+  if (pill.value > 0) return 'bg-red-500/20 text-red-300'
+  if (pill.value < 0) return 'bg-green-500/20 text-green-300'
   return 'bg-white/10 text-slate-300'
 }
 
