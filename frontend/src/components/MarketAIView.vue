@@ -73,7 +73,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { BrainCircuit, MessageCircle, TrendingUp, TrendingDown, Minus, X } from 'lucide-vue-next'
 import { getMarketIndex } from '@/services/twseApi'
 
@@ -220,19 +220,40 @@ function pillClass(pill) {
   return 'bg-white/10 text-slate-300'
 }
 
-onMounted(async () => {
+async function loadData() {
   loading.value = true
   error.value = ''
   try {
     const payload = await getMarketIndex()
     rows.value = Array.isArray(payload.data) ? payload.data : []
-    setTimeout(() => { showQuestion.value = true }, 600)
+    if (!showQuestion.value) setTimeout(() => { showQuestion.value = true }, 600)
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
   } finally {
     loading.value = false
   }
-})
+}
+
+function isMarketHours() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const t = now.getHours() * 60 + now.getMinutes()
+  return t >= 9 * 60 && t <= 13 * 60 + 35
+}
+
+let refreshTimer = null
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+function startRefresh() {
+  stopRefresh()
+  if (!isMarketHours()) return
+  refreshTimer = setInterval(() => { if (isMarketHours()) loadData(); else stopRefresh() }, 60_000)
+}
+
+onMounted(() => { loadData(); startRefresh() })
+onUnmounted(stopRefresh)
 </script>
 
 <style scoped>
