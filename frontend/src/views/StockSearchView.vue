@@ -168,11 +168,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { Search, X, BarChart2 } from 'lucide-vue-next'
 import StockChart from '@/components/StockChart.vue'
 import { searchStocks, TW_STOCKS, seedFromCode } from '@/data/twStocks'
-import { getDbBars, searchDbStocks } from '@/services/twseApi'
+import { getDbBars, searchDbStocks, getQuote } from '@/services/twseApi'
 
 // ── Search state ──────────────────────────────
 const query       = ref('')
@@ -235,16 +235,20 @@ function clearQuery() {
 // ── Stock selection ───────────────────────────
 const selected = ref(null)
 const selectedBars = ref([])
+const liveQuote = ref(null)
 let selectedBarsSeq = 0
 
 function selectStock(stock) {
   selected.value     = stock
   selectedBars.value = []
+  liveQuote.value    = null
   skipNextWatch      = true
   query.value        = `${stock.code} ${stock.name}`
   showDropdown.value = false
   focused.value      = false
   loadSelectedBars(stock.code)
+  loadLiveQuote(stock.code)
+  startRefresh(stock.code)
 }
 
 async function loadSelectedBars(code) {
@@ -257,27 +261,67 @@ async function loadSelectedBars(code) {
   }
 }
 
+async function loadLiveQuote(code) {
+  try {
+    const res = await getQuote(code)
+    if (selected.value?.code === code) liveQuote.value = res.data || null
+  } catch {
+    // silently ignore; header falls back to bar data
+  }
+}
+
+function isMarketHours() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const t = now.getHours() * 60 + now.getMinutes()
+  return t >= 9 * 60 && t <= 13 * 60 + 35
+}
+
+let refreshTimer = null
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+function startRefresh(code) {
+  stopRefresh()
+  if (!isMarketHours()) return
+  refreshTimer = setInterval(() => {
+    if (isMarketHours()) loadLiveQuote(code)
+    else stopRefresh()
+  }, 15_000)
+}
+
+onUnmounted(stopRefresh)
+
 // ── Hot stocks ────────────────────────────────
 const hotStocks = TW_STOCKS.filter(s =>
   ['2330','2454','2382','0050','2603','3008','2317','2327'].includes(s.code)
 )
 
-// Price stats come from the latest bars returned by the backend.
+// Price stats: prefer live quote, fall back to latest K-bar from DB
 const latestBar = computed(() => selectedBars.value.at(-1) || null)
 const previousBar = computed(() => selectedBars.value.at(-2) || null)
 
 const latestClose = computed(() => {
   if (!selected.value) return 0
+  if (liveQuote.value?.price != null) return liveQuote.value.price
   return Number(latestBar.value?.close ?? selected.value.price ?? 0)
 })
 
 const prevClose = computed(() => {
   if (!selected.value) return 0
+  if (liveQuote.value?.prevClose != null) return liveQuote.value.prevClose
   return Number(previousBar.value?.close ?? selected.value.price ?? latestClose.value)
 })
 
-const priceChange = computed(() => latestClose.value - prevClose.value)
-const priceChangePct = computed(() => prevClose.value ? (priceChange.value / prevClose.value) * 100 : 0)
+const priceChange = computed(() => {
+  if (liveQuote.value?.change != null) return liveQuote.value.change
+  return latestClose.value - prevClose.value
+})
+const priceChangePct = computed(() => {
+  if (liveQuote.value?.changePct != null) return liveQuote.value.changePct
+  return prevClose.value ? (priceChange.value / prevClose.value) * 100 : 0
+})
 
 // ── AI analysis text (per stock) ─────────────
 const aiAnalysis = computed(() => {

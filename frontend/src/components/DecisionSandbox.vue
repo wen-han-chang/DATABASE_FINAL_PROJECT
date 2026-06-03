@@ -116,7 +116,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { Lightbulb } from 'lucide-vue-next'
 import { getQuote, searchDbStocks } from '@/services/twseApi'
 import { useWatchlistStore } from '@/stores/watchlist'
@@ -172,15 +172,15 @@ function decorateStatus(status) {
   if (status === 'UP') {
     return {
       statusLabel: '上漲',
-      accentClass: 'bg-green-500',
-      badgeClass: 'bg-green-50 text-green-700',
+      accentClass: 'bg-red-500',
+      badgeClass: 'bg-red-50 text-red-700',
     }
   }
   if (status === 'DOWN') {
     return {
       statusLabel: '下跌',
-      accentClass: 'bg-red-500',
-      badgeClass: 'bg-red-50 text-red-700',
+      accentClass: 'bg-green-500',
+      badgeClass: 'bg-green-50 text-green-700',
     }
   }
   return {
@@ -292,7 +292,31 @@ watch(watchCodes, (newCodes, oldCodes) => {
   }
 })
 
-onMounted(loadCards)
+function isMarketHours() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const t = now.getHours() * 60 + now.getMinutes()
+  return t >= 9 * 60 && t <= 13 * 60 + 35
+}
+
+let refreshTimer = null
+
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+
+function startRefresh() {
+  stopRefresh()
+  if (!isMarketHours()) return
+  refreshTimer = setInterval(() => {
+    if (isMarketHours()) loadCards()
+    else stopRefresh()
+  }, 30_000)
+}
+
+onMounted(() => { loadCards(); startRefresh() })
+onUnmounted(stopRefresh)
 </script>
 
 <style scoped>

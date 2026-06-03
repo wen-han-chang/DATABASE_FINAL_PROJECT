@@ -39,7 +39,7 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { getQuote } from '@/services/twseApi'
 
 const props = defineProps({
@@ -75,7 +75,25 @@ async function load() {
   }
 }
 
-// 進來抓一次；換股票時重新抓一次（不做定時輪詢，避免濫用官方資源）
-onMounted(load)
-watch(() => props.code, load)
+function isMarketHours() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const t = now.getHours() * 60 + now.getMinutes()
+  return t >= 9 * 60 && t <= 13 * 60 + 35
+}
+
+let refreshTimer = null
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+function startRefresh() {
+  stopRefresh()
+  if (!isMarketHours()) return
+  refreshTimer = setInterval(() => { if (isMarketHours()) load(); else stopRefresh() }, 15_000)
+}
+
+onMounted(() => { load(); startRefresh() })
+watch(() => props.code, () => { load(); startRefresh() })
+onUnmounted(stopRefresh)
 </script>

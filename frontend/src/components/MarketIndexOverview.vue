@@ -50,15 +50,15 @@
       </div>
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div class="rounded-xl border border-green-100 bg-green-50/70 p-4">
-          <p class="text-xs font-semibold text-green-700 mb-2">強勢類股</p>
+        <div class="rounded-xl border border-red-100 bg-red-50/70 p-4">
+          <p class="text-xs font-semibold text-red-700 mb-2">強勢類股</p>
           <div v-for="sector in strongSectors" :key="sector.name" class="flex items-center justify-between py-1 text-sm">
             <span class="text-brand-primary">{{ sector.name }}</span>
             <span class="font-mono font-semibold text-stock-up">{{ signedPercent(sector.changePct) }}</span>
           </div>
         </div>
-        <div class="rounded-xl border border-red-100 bg-red-50/70 p-4">
-          <p class="text-xs font-semibold text-red-700 mb-2">弱勢類股</p>
+        <div class="rounded-xl border border-green-100 bg-green-50/70 p-4">
+          <p class="text-xs font-semibold text-green-700 mb-2">弱勢類股</p>
           <div v-for="sector in weakSectors" :key="sector.name" class="flex items-center justify-between py-1 text-sm">
             <span class="text-brand-primary">{{ sector.name }}</span>
             <span class="font-mono font-semibold text-stock-down">{{ signedPercent(sector.changePct) }}</span>
@@ -70,7 +70,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { getMarketIndex } from '@/services/twseApi'
 
 const loading = ref(true)
@@ -160,7 +160,7 @@ const summary = computed(() => {
   }${weakest ? `相對弱勢為${weakest.name}。` : ''}`
 })
 
-onMounted(async () => {
+async function loadData() {
   loading.value = true
   error.value = ''
   try {
@@ -171,5 +171,26 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
-})
+}
+
+function isMarketHours() {
+  const now = new Date()
+  const day = now.getDay()
+  if (day === 0 || day === 6) return false
+  const t = now.getHours() * 60 + now.getMinutes()
+  return t >= 9 * 60 && t <= 13 * 60 + 35
+}
+
+let refreshTimer = null
+function stopRefresh() {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
+}
+function startRefresh() {
+  stopRefresh()
+  if (!isMarketHours()) return
+  refreshTimer = setInterval(() => { if (isMarketHours()) loadData(); else stopRefresh() }, 60_000)
+}
+
+onMounted(() => { loadData(); startRefresh() })
+onUnmounted(stopRefresh)
 </script>
